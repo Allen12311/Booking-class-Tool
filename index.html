@@ -367,7 +367,10 @@ tbody tr:hover { background: var(--sky-light); }
       <img id="userAvatar" style="width:28px;height:28px;border-radius:50%;border:1px solid var(--gold)" src="" alt="">
       <span id="userName" class="btn-label"></span>
     </div>
-    <div id="groupBadge" style="display:none;align-items:center;gap:6px;background:rgba(184,137,74,0.2);border:1px solid var(--gold-light);border-radius:4px;padding:4px 10px;font-family:'DM Mono',monospace;font-size:10px;color:var(--gold-light)"></div>
+    <div id="groupBadge" onclick="openGroupManagement()" style="display:none;align-items:center;gap:6px;background:rgba(184,137,74,0.2);border:1px solid var(--gold-light);border-radius:4px;padding:4px 10px;font-family:'DM Mono',monospace;font-size:10px;color:var(--gold-light);cursor:pointer" title="群組管理"></div>
+    <button class="btn btn-outline btn-sm" id="groupMgmtBtn" onclick="openGroupManagement()" style="display:none;align-items:center;gap:5px" title="群組管理">
+      <span>👥</span><span class="btn-label" style="font-size:11px">群組</span>
+    </button>
 
     <button class="btn btn-outline btn-sm" id="notifBtn" onclick="toggleNotification()" title="課程提醒通知" style="display:flex;align-items:center;gap:5px">
       <span id="notifIcon">🔔</span><span id="notifLabel" class="btn-label" style="font-size:11px">通知</span>
@@ -573,8 +576,17 @@ tbody tr:hover { background: var(--sky-light); }
     <div class="add-teacher-btn" onclick="openAddTeacher();closeDrawer()"><span>＋</span> 新增老師</div>
   </div>
   <div style="padding:12px 20px 24px;margin-top:auto;border-top:1px solid rgba(255,255,255,.08);display:flex;flex-direction:column;gap:8px">
+    <!-- 群組資訊（登入後才顯示） -->
+    <div id="drawerGroupInfo" style="display:none;background:rgba(184,137,74,0.15);border:1px solid rgba(184,137,74,0.3);border-radius:8px;padding:10px 12px;margin-bottom:4px">
+      <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--gold-light);margin-bottom:6px">群組代碼</div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span id="drawerGroupCode" style="font-family:'DM Mono',monospace;font-size:16px;font-weight:700;color:var(--gold);letter-spacing:4px"></span>
+        <button onclick="openGroupManagement();closeDrawer()" style="padding:4px 10px;font-size:11px;border:1px solid rgba(184,137,74,0.4);border-radius:4px;background:transparent;cursor:pointer;color:var(--gold-light)">👥 管理</button>
+      </div>
+    </div>
     <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="openFirebaseConfig();closeDrawer()">🔥 Firebase 設定</button>
     <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="exportCSV();closeDrawer()">📤 匯出 CSV</button>
+    <button class="btn btn-outline btn-sm" id="drawerAuthBtn" onclick="handleAuth();closeDrawer()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">👤 登入</button>
   </div>
 </div>
 
@@ -873,19 +885,22 @@ function onAuthStateChanged(user) {
     var userName = document.getElementById('userName');
     var userAvatar = document.getElementById('userAvatar');
     var authBtn = document.getElementById('authBtn');
+    var drawerAuthBtn = document.getElementById('drawerAuthBtn');
     if (userInfo) userInfo.style.display = 'flex';
     if (userName) userName.textContent = user.displayName || user.email;
     if (userAvatar && user.photoURL) userAvatar.src = user.photoURL;
     if (authBtn) { authBtn.querySelector('.btn-label').textContent = '登出'; authBtn.querySelector('span:first-child').textContent = '🚪'; }
+    if (drawerAuthBtn) { drawerAuthBtn.innerHTML = '🚪 登出'; }
     startIdleTimer();
-    // 檢查是否已有群組
     checkUserGroup();
   } else {
     document.getElementById('loginOverlay').style.display = 'flex';
     var userInfo = document.getElementById('userInfo');
     var authBtn = document.getElementById('authBtn');
+    var drawerAuthBtn = document.getElementById('drawerAuthBtn');
     if (userInfo) userInfo.style.display = 'none';
     if (authBtn) { authBtn.querySelector('.btn-label').textContent = '登入'; authBtn.querySelector('span:first-child').textContent = '👤'; }
+    if (drawerAuthBtn) { drawerAuthBtn.innerHTML = '👤 登入'; }
     stopIdleTimer();
     stopDataListeners();
     currentGroupId = null;
@@ -917,9 +932,18 @@ function showGroupSetup() {
 
 function updateGroupUI() {
   var badge = document.getElementById('groupBadge');
+  var mgmtBtn = document.getElementById('groupMgmtBtn');
   if (badge) {
     badge.textContent = currentGroupId ? ('群組: ' + currentGroupId.slice(4,12).toUpperCase()) : '';
     badge.style.display = currentGroupId ? 'flex' : 'none';
+  }
+  if (mgmtBtn) mgmtBtn.style.display = currentGroupId ? 'flex' : 'none';
+  // 更新 Drawer 的群組資訊
+  var drawerGroupInfo = document.getElementById('drawerGroupInfo');
+  if (drawerGroupInfo) {
+    drawerGroupInfo.style.display = currentGroupId ? 'block' : 'none';
+    var drawerGroupCode = document.getElementById('drawerGroupCode');
+    if (drawerGroupCode) drawerGroupCode.textContent = currentGroupId ? currentGroupId.slice(4,12).toUpperCase() : '';
   }
 }
 
@@ -992,6 +1016,60 @@ async function joinGroup() {
       toast('加入失敗：' + e.message, '⚠️');
     }
   }
+}
+
+function openGroupManagement() {
+  if (!currentGroupId) return;
+  renderGroupMembers();
+  openModal('groupMgmtOverlay');
+}
+
+async function renderGroupMembers() {
+  if (!currentGroupId || !db) return;
+  var body = document.getElementById('groupMgmtBody');
+  if (!body) return;
+  body.innerHTML = '<div style="color:var(--text-sub);font-size:13px;padding:12px 0">載入中…</div>';
+  try {
+    var doc = await db.collection('groups').doc(currentGroupId).get();
+    var data = doc.data();
+    var members = data.members || {};
+    var inviteCode = currentGroupId.slice(4,12).toUpperCase();
+    var rows = Object.entries(members).map(function(entry) {
+      var uid = entry[0], m = entry[1];
+      var isMe = uid === currentUser.uid;
+      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">'
+        + '<div style="flex:1">'
+        + '<div style="font-size:13px;font-weight:600;color:var(--ink)">' + (m.name || m.email) + (isMe ? ' <span style="font-size:10px;color:var(--gold)">（你）</span>' : '') + '</div>'
+        + '<div style="font-size:11px;color:var(--text-sub)">' + m.email + '</div>'
+        + '</div>'
+        + (!isMe ? '<button onclick="removeMember(\'' + uid + '\')" style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer;color:var(--rust)">移除</button>' : '')
+        + '</div>';
+    }).join('');
+    body.innerHTML = '<div style="background:var(--cream);border-radius:8px;padding:12px 14px;margin-bottom:16px">'
+      + '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);margin-bottom:6px">邀請代碼（分享給其他人加入）</div>'
+      + '<div style="display:flex;align-items:center;gap:10px">'
+      + '<span style="font-size:20px;font-weight:700;font-family:DM Mono,monospace;color:var(--gold);letter-spacing:4px">' + inviteCode + '</span>'
+      + '<button onclick="navigator.clipboard.writeText(\'' + inviteCode + '\').then(function(){toast(\'代碼已複製\',\'📋\')})" style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:#fff;cursor:pointer">📋 複製</button>'
+      + '</div></div>'
+      + '<div style="font-size:13px;font-weight:600;margin-bottom:8px">成員列表（' + Object.keys(members).length + ' 人）</div>'
+      + rows;
+  } catch(e) {
+    body.innerHTML = '<div style="color:var(--rust);font-size:13px">載入失敗：' + e.message + '</div>';
+  }
+}
+
+async function removeMember(uid) {
+  if (!currentGroupId || !db) return;
+  showConfirm('移除成員', '確定要將此成員從群組中移除？', async function() {
+    try {
+      var updateData = {};
+      updateData['members.' + uid] = firebase.firestore.FieldValue.delete();
+      updateData['memberUIDs'] = firebase.firestore.FieldValue.arrayRemove(uid);
+      await db.collection('groups').doc(currentGroupId).update(updateData);
+      toast('成員已移除', '✅');
+      renderGroupMembers();
+    } catch(e) { toast('移除失敗：' + e.message, '⚠️'); }
+  }, '確認移除');
 }
 
 async function leaveGroup() {
