@@ -1064,44 +1064,89 @@ function deleteTeacher(id, e) {
   var t = teachers.find(function(x){ return x.id === id; });
   if (!t) return;
 
-  var todayStr = new Date().toISOString().slice(0, 10);
+  var now = new Date();
+  var todayStr = now.toISOString().slice(0, 10);
+  var nowMins = now.getHours() * 60 + now.getMinutes();
+
   var allBookings = bookings.filter(function(b){ return b.teacherId === id; });
+
+  // 尚未完成：confirmed 或 pending，且日期時間還沒過
   var activeBookings = allBookings.filter(function(b){
-    return (b.status === 'confirmed' || b.status === 'pending') && b.date >= todayStr;
+    if (b.status !== 'confirmed' && b.status !== 'pending') return false;
+    if (b.date > todayStr) return true;
+    if (b.date === todayStr) {
+      var parts = b.time.split(':').map(Number);
+      return (parts[0] * 60 + parts[1]) > nowMins;
+    }
+    return false;
   }).sort(function(a, b){ return (a.date + a.time).localeCompare(b.date + b.time); });
+
+  // 過去未處理（confirmed/pending 但日期已過）
+  var pastUnfinished = allBookings.filter(function(b){
+    if (b.status !== 'confirmed' && b.status !== 'pending') return false;
+    if (b.date < todayStr) return true;
+    if (b.date === todayStr) {
+      var parts = b.time.split(':').map(Number);
+      return (parts[0] * 60 + parts[1]) <= nowMins;
+    }
+    return false;
+  }).length;
+
   var completedCnt = allBookings.filter(function(b){ return b.status === 'completed'; }).length;
   var cancelledCnt = allBookings.filter(function(b){ return b.status === 'cancelled'; }).length;
+
+  // 所有未完成課程（非已完成、非已取消）全部列出，按日期排序
+  var unfinishedBookings = allBookings.filter(function(b){
+    return b.status !== 'completed' && b.status !== 'cancelled';
+  }).sort(function(a, b){ return (a.date + a.time).localeCompare(b.date + b.time); });
 
   var warnMsg = '';
 
   if (allBookings.length === 0) {
     warnMsg = '確定要刪除老師 <strong>' + t.name + '</strong>？<br><span style="font-size:12px;color:var(--text-sub)">此操作無法復原。</span>';
   } else {
-    // 預約統計摘要
     warnMsg += '<div style="margin-bottom:10px;font-size:13px">刪除後，<strong>' + t.name + '</strong> 的所有預約老師欄位將顯示為「—」，預約記錄本身不會刪除。</div>';
-    warnMsg += '<div style="background:var(--cream);border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:10px">';
-    warnMsg += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:' + (activeBookings.length > 0 ? '10px' : '0') + '">';
-    warnMsg += '<span>共 <strong>' + allBookings.length + '</strong> 筆預約</span>';
-    if (completedCnt > 0) warnMsg += '<span style="color:var(--sky)">已完成 ' + completedCnt + '</span>';
-    if (cancelledCnt > 0) warnMsg += '<span style="color:var(--rust)">已取消 ' + cancelledCnt + '</span>';
-    warnMsg += '</div>';
 
-    // 進行中預約列表
-    if (activeBookings.length > 0) {
-      warnMsg += '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:6px">⚠️ 尚有 ' + activeBookings.length + ' 筆進行中預約</div>';
-      warnMsg += '<div style="display:flex;flex-direction:column;gap:4px;max-height:140px;overflow-y:auto;-webkit-overflow-scrolling:touch">';
-      activeBookings.forEach(function(b) {
-        var statusColor = b.status === 'confirmed' ? '#2d7a4a' : '#8b5e1a';
-        var statusLabel = b.status === 'confirmed' ? '已確認' : '待確認';
-        warnMsg += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">'
-          + '<span style="font-family:DM Mono,monospace;font-size:11px;color:var(--ink);flex-shrink:0">' + b.date + '</span>'
-          + '<span style="font-family:DM Mono,monospace;font-size:11px;color:var(--text-sub);flex-shrink:0">' + b.time + '</span>'
-          + '<span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + b.name + ' · ' + b.course + '</span>'
-          + '<span style="font-size:10px;color:' + statusColor + ';flex-shrink:0">' + statusLabel + '</span>'
+    // 未完成課程列表（有才顯示）
+    if (unfinishedBookings.length > 0) {
+      warnMsg += '<div style="background:#fef3e2;border:1px solid #f0d090;border-radius:8px;padding:10px 12px;margin-bottom:10px">';
+      warnMsg += '<div style="font-size:12px;font-weight:600;color:#8b5e1a;margin-bottom:8px">⚠️ 尚有 ' + unfinishedBookings.length + ' 筆未完成課程</div>';
+      warnMsg += '<div style="display:flex;flex-direction:column;gap:0;max-height:160px;overflow-y:auto;-webkit-overflow-scrolling:touch">';
+      unfinishedBookings.forEach(function(b) {
+        var isPast = b.date < todayStr || (b.date === todayStr && (function(){
+          var p = b.time.split(':').map(Number); return p[0]*60+p[1] <= nowMins;
+        })());
+        // 逾期時只顯示「逾期」，不顯示原本狀態
+        var statusLabel, statusColor, statusBg;
+        if (isPast) {
+          statusLabel = '逾期';
+          statusColor = '#fff';
+          statusBg = 'var(--rust)';
+        } else if (b.status === 'confirmed') {
+          statusLabel = '已確認';
+          statusColor = '#2d7a4a';
+          statusBg = '#e6f4ec';
+        } else {
+          statusLabel = '待確認';
+          statusColor = '#8b5e1a';
+          statusBg = '#fef3e2';
+        }
+        warnMsg += '<div style="display:grid;grid-template-columns:auto auto 1fr auto;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid #f0d090">'
+          + '<span style="font-family:DM Mono,monospace;font-size:11px;color:var(--ink)">' + b.date + '</span>'
+          + '<span style="font-family:DM Mono,monospace;font-size:11px;color:var(--text-sub)">' + b.time + (b.endTime ? '–'+b.endTime : '') + '</span>'
+          + '<span style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><strong>' + b.name + '</strong> · ' + b.course + '</span>'
+          + '<span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;flex-shrink:0;color:' + statusColor + ';background:' + statusBg + '">' + statusLabel + '</span>'
           + '</div>';
       });
-      warnMsg += '</div>';
+      warnMsg += '</div></div>';
     }
+
+    // 統計摘要
+    warnMsg += '<div style="background:var(--cream);border-radius:8px;padding:8px 12px;font-size:12px;display:flex;gap:12px;flex-wrap:wrap">';
+    warnMsg += '<span>共 <strong>' + allBookings.length + '</strong> 筆</span>';
+    if (unfinishedBookings.length > 0) warnMsg += '<span style="color:#8b5e1a">未完成 ' + unfinishedBookings.length + '</span>';
+    if (completedCnt > 0) warnMsg += '<span style="color:var(--sky)">已完成 ' + completedCnt + '</span>';
+    if (cancelledCnt > 0) warnMsg += '<span style="color:var(--text-sub)">已取消 ' + cancelledCnt + '</span>';
     warnMsg += '</div>';
   }
 
@@ -2139,11 +2184,48 @@ function checkUpcomingClasses() {
   if (toDelete.length) localStorage.setItem('sb_notified', JSON.stringify([...notifiedSet]));
 }
 
+// ── 自動完成 ──
+// 結束時間過後，已確認的課程自動標記為已完成（每分鐘檢查一次）
+function autoCompleteBookings() {
+  var n = new Date();
+  var todayStr = n.toISOString().slice(0, 10);
+  var nowMins = n.getHours() * 60 + n.getMinutes();
+  var changed = false;
+
+  bookings.forEach(function(b) {
+    if (b.status !== 'confirmed') return;  // 只處理已確認
+    if (!b.endTime) return;                // 沒有結束時間則跳過
+
+    var isOver = false;
+    if (b.date < todayStr) {
+      isOver = true;
+    } else if (b.date === todayStr) {
+      var parts = b.endTime.split(':').map(Number);
+      isOver = (parts[0] * 60 + parts[1]) <= nowMins;
+    }
+
+    if (isOver) {
+      b.status = 'completed';
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    save();
+    renderTeachers();
+    renderAll();
+  }
+}
+
 // 初始化通知狀態
 updateNotifBtn();
 if (notifEnabled && 'Notification' in window && Notification.permission === 'granted') {
   startNotifTimer();
 }
+
+// 頁面載入時立即執行一次，之後每分鐘檢查
+autoCompleteBookings();
+setInterval(autoCompleteBookings, 60000);
 </script>
 </body>
 </html>
