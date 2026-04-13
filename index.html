@@ -647,6 +647,9 @@ tbody tr:hover { background: var(--sky-light); }
                 📥 從雲端還原
               </button>
             </div>
+            <button onclick="gdriveReauth()" style="margin-top:8px;width:100%;padding:6px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer;color:var(--text-sub);font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px">
+              🔄 重新授權（更新 scope 後請點此）
+            </button>
             <div id="gdriveFileInfo" style="margin-top:8px;font-size:11px;color:var(--text-sub)"></div>
           </div>
         </div>
@@ -1806,6 +1809,14 @@ function gdriveInit(clientId) {
       callback: function(resp) {
         if (resp.error) { gdriveSetStatus(false, '登入失敗：' + resp.error); return; }
         gAccessToken = resp.access_token;
+        // 驗證 token 確實包含 drive.appdata scope
+        var granted = resp.scope || '';
+        if (granted && granted.indexOf('drive.appdata') === -1) {
+          gdriveSetStatus(false, '權限不足，請重新登入並允許雲端存取');
+          toast('請重新登入並在授權畫面勾選 Google Drive 存取權限', '⚠️');
+          gAccessToken = null;
+          return;
+        }
         gdriveSetStatus(true, '已登入 Google');
         gCheckLastBackup();
       }
@@ -1837,6 +1848,16 @@ function gdriveSetStatus(loggedIn, text) {
 }
 
 function gdriveLogin() {
+  if (!gTokenClient) {
+    toast('Google API 尚未載入，請確認網路連線', '⚠️'); return;
+  }
+  gTokenClient.requestAccessToken({ prompt: 'consent' });
+}
+
+function gdriveReauth() {
+  // 清除舊 token，強制重新授權取得最新 scope
+  gAccessToken = null;
+  gdriveSetStatus(false, '重新授權中...');
   if (!gTokenClient) {
     toast('Google API 尚未載入，請確認網路連線', '⚠️'); return;
   }
@@ -1889,6 +1910,21 @@ function gCheckLastBackup() {
 
 function gdriveUpload() {
   if (!gAccessToken) { toast('請先登入 Google', '⚠️'); return; }
+  // 先用 tokeninfo 確認 scope
+  fetch('https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=' + gAccessToken)
+    .then(function(r) { return r.json(); })
+    .then(function(info) {
+      if (!info.scope || info.scope.indexOf('drive.appdata') === -1) {
+        toast('token 缺少 drive.appdata 權限，請重新登入', '⚠️');
+        gAccessToken = null;
+        gdriveSetStatus(false, '權限不足，請重新登入');
+        return;
+      }
+      gdriveUploadExec();
+    }).catch(function() { gdriveUploadExec(); }); // 驗證失敗就直接嘗試
+}
+
+function gdriveUploadExec() {
   var config = { version: 1, exportedAt: new Date().toISOString(), teachers: teachers, bookings: bookings };
   var json = JSON.stringify(config, null, 2);
 
@@ -1912,7 +1948,12 @@ function gdriveUpload() {
   }).then(function(r) {
     if (!r) return;
     if (gdriveHandleAuthError(r)) return;
-    if (!r.ok) { toast('備份失敗（HTTP ' + r.status + '）', '⚠️'); return; }
+    if (!r.ok) {
+      return r.json().then(function(err) {
+        var msg = (err && err.error && err.error.message) ? err.error.message : 'HTTP ' + r.status;
+        toast('備份失敗：' + msg, '⚠️');
+      });
+    }
     return r.json();
   }).then(function(result) {
     if (!result) return;
