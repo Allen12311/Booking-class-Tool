@@ -2003,6 +2003,7 @@ function gdriveDownload() {
 // ── 裝置同步 END ──
 
 let notifEnabled = localStorage.getItem('sb_notif') === 'true';
+let notifAdvance = parseInt(localStorage.getItem('sb_notif_advance') || '15', 10);
 let notifTimer = null;
 const notifiedSet = new Set(JSON.parse(localStorage.getItem('sb_notified') || '[]'));
 // 提前幾分鐘通知的選項
@@ -2078,9 +2079,10 @@ function renderNotifSettings() {
   const permText = 'Notification' in window ? Notification.permission : '不支援';
 
   // 明日課程（前一天通知預覽）
-  const tomorrowDate = new Date(now); tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const today = new Date();
+  const tomorrowDate = new Date(today); tomorrowDate.setDate(tomorrowDate.getDate() + 1);
   const tomorrowStr = tomorrowDate.toISOString().slice(0, 10);
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStr = today.toISOString().slice(0, 10);
 
   function courseRows(dateStr, label) {
     const list = bookings.filter(function(b) {
@@ -2203,7 +2205,8 @@ function checkUpcomingClasses() {
 
   // ── 當天通知：上課前 N 分鐘 ──
   bookings.forEach(function(b) {
-    if (b.date !== todayStr || b.status === 'cancelled') return;
+    if (b.date !== todayStr) return;
+    if (b.status === 'cancelled' || b.status === 'completed') return; // 已取消或已完成不通知
     const minKey = 'min_' + b.date + '_' + b.time + '_' + b.id;
     if (notifiedSet.has(minKey)) return;
     const [bh, bm] = b.time.split(':').map(Number);
