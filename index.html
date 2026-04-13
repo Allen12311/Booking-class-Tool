@@ -650,9 +650,12 @@ tbody tr:hover { background: var(--sky-light); }
 <!-- GROUP SETUP OVERLAY -->
 <div id="groupSetupOverlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(28,25,23,0.85);z-index:998;align-items:center;justify-content:center">
   <div style="background:var(--paper);border-radius:14px;width:480px;max-width:95vw;overflow:hidden;box-shadow:var(--shadow-lg)">
-    <div style="background:var(--ink);padding:24px 28px;color:var(--paper)">
-      <div style="font-size:18px;font-weight:700">👥 加入或建立群組</div>
-      <div style="font-size:11px;color:var(--gold-light);letter-spacing:2px;margin-top:4px">GROUP SETUP</div>
+    <div style="background:var(--ink);padding:24px 28px;color:var(--paper);display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:18px;font-weight:700">👥 加入或建立群組</div>
+        <div style="font-size:11px;color:var(--gold-light);letter-spacing:2px;margin-top:4px">GROUP SETUP</div>
+      </div>
+      <button id="groupSetupCloseBtn" onclick="closeGroupSetup()" style="display:none;width:32px;height:32px;border-radius:50%;border:1px solid rgba(255,255,255,0.2);background:transparent;color:var(--paper);cursor:pointer;font-size:16px;align-items:center;justify-content:center">✕</button>
     </div>
     <div style="padding:24px 28px">
       <!-- 建立群組 -->
@@ -668,10 +671,10 @@ tbody tr:hover { background: var(--sky-light); }
       <div>
         <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:10px">加入已有群組</div>
         <div style="display:flex;gap:8px">
-          <input class="form-input" id="joinGroupCode" placeholder="輸入 8 碼群組代碼" style="flex:1;font-family:'DM Mono',monospace;letter-spacing:2px">
+          <input class="form-input" id="joinGroupCode" placeholder="貼上群組邀請代碼" style="flex:1;font-family:'DM Mono',monospace;font-size:12px">
           <button class="btn btn-gold btn-sm" onclick="joinGroup()">加入</button>
         </div>
-        <div style="font-size:11px;color:var(--text-sub);margin-top:8px">請向群組管理者索取代碼</div>
+        <div style="font-size:11px;color:var(--text-sub);margin-top:8px">請向群組管理者複製邀請代碼後貼上</div>
       </div>
     </div>
   </div>
@@ -927,14 +930,21 @@ async function checkUserGroup() {
 }
 
 function showGroupSetup() {
+  var closeBtn = document.getElementById('groupSetupCloseBtn');
+  // 只有在已有群組的情況下才顯示關閉按鈕（例如：想加入另一個群組）
+  if (closeBtn) closeBtn.style.display = currentGroupId ? 'flex' : 'none';
   document.getElementById('groupSetupOverlay').style.display = 'flex';
+}
+
+function closeGroupSetup() {
+  document.getElementById('groupSetupOverlay').style.display = 'none';
 }
 
 function updateGroupUI() {
   var badge = document.getElementById('groupBadge');
   var mgmtBtn = document.getElementById('groupMgmtBtn');
   if (badge) {
-    badge.textContent = currentGroupId ? ('群組: ' + currentGroupId.slice(4,12).toUpperCase()) : '';
+    badge.textContent = currentGroupId ? ('群組: ' + currentGroupId.slice(4)) : '';
     badge.style.display = currentGroupId ? 'flex' : 'none';
   }
   if (mgmtBtn) mgmtBtn.style.display = currentGroupId ? 'flex' : 'none';
@@ -943,7 +953,7 @@ function updateGroupUI() {
   if (drawerGroupInfo) {
     drawerGroupInfo.style.display = currentGroupId ? 'block' : 'none';
     var drawerGroupCode = document.getElementById('drawerGroupCode');
-    if (drawerGroupCode) drawerGroupCode.textContent = currentGroupId ? currentGroupId.slice(4,12).toUpperCase() : '';
+    if (drawerGroupCode) drawerGroupCode.textContent = currentGroupId ? currentGroupId.slice(4) : '';
   }
 }
 
@@ -965,27 +975,25 @@ async function createGroup() {
     document.getElementById('groupSetupOverlay').style.display = 'none';
     updateGroupUI();
     startDataListeners();
-    toast('群組已建立！代碼：' + groupId.slice(4,12).toUpperCase(), '🎉');
+    toast('群組已建立！代碼：' + groupId.slice(4), '🎉');
   } catch(e) { toast('建立失敗：' + e.message, '⚠️'); }
 }
 
 async function joinGroup() {
   if (!currentUser) { toast('請先登入', '⚠️'); return; }
   if (!db) { toast('請先完成 Firebase 設定', '⚠️'); return; }
-  var code = document.getElementById('joinGroupCode').value.trim().toUpperCase();
+  var code = document.getElementById('joinGroupCode').value.trim();
   if (!code) { toast('請輸入群組代碼', '⚠️'); return; }
 
+  // 支援完整 groupId（grp_XXXXX）或去掉前綴的版本
+  var groupId = code.startsWith('grp_') ? code : ('grp_' + code);
+
   toast('搜尋群組中…', '🔍');
-
   try {
-    // 直接用代碼重建完整 groupId 嘗試讀取
-    var groupId = 'grp_' + code.toLowerCase();
     var groupDoc = await db.collection('groups').doc(groupId).get();
-
     if (!groupDoc.exists) {
-      toast('找不到此群組代碼，請確認代碼是否正確', '⚠️'); return;
+      toast('找不到此群組代碼，請確認是否貼上完整代碼', '⚠️'); return;
     }
-    // 檢查是否已是成員
     var memberUIDs = groupDoc.data().memberUIDs || [];
     if (memberUIDs.indexOf(currentUser.uid) !== -1) {
       toast('你已經是此群組成員', 'ℹ️');
@@ -995,7 +1003,6 @@ async function joinGroup() {
       startDataListeners();
       return;
     }
-    // 加入群組
     var updateData = {};
     updateData['members.' + currentUser.uid] = {
       email: currentUser.email,
@@ -1008,7 +1015,7 @@ async function joinGroup() {
     document.getElementById('groupSetupOverlay').style.display = 'none';
     updateGroupUI();
     startDataListeners();
-    toast('已加入群組：' + (groupDoc.data().name || code), '✅');
+    toast('已加入群組：' + (groupDoc.data().name || groupId), '✅');
   } catch(e) {
     if (e.code === 'permission-denied') {
       toast('代碼錯誤或群組不存在', '⚠️');
@@ -1033,7 +1040,7 @@ async function renderGroupMembers() {
     var doc = await db.collection('groups').doc(currentGroupId).get();
     var data = doc.data();
     var members = data.members || {};
-    var inviteCode = currentGroupId.slice(4,12).toUpperCase();
+    var inviteCode = currentGroupId.slice(4);
     var rows = Object.entries(members).map(function(entry) {
       var uid = entry[0], m = entry[1];
       var isMe = uid === currentUser.uid;
