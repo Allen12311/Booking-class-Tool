@@ -57,6 +57,10 @@ header { background: var(--ink); color: var(--paper); padding: 0 36px; height: 6
 .teacher-list { padding: 0 12px 12px; flex: 1; }
 .teacher-chip { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; transition: all 0.15s; margin-bottom: 4px; }
 .teacher-chip:hover { background: rgba(255,255,255,0.06); }
+.teacher-chip .teacher-del { opacity: 0; transition: opacity 0.15s, background 0.15s; }
+.teacher-chip:hover .teacher-del { opacity: 1; }
+/* 手機 Drawer 內常態顯示刪除按鈕（無 hover） */
+.mobile-drawer .teacher-chip .teacher-del { opacity: 1; }
 .teacher-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .teacher-name { color: rgba(255,255,255,0.85); font-size: 13px; flex: 1; }
 .teacher-count { font-family: 'DM Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.35); }
@@ -812,10 +816,8 @@ function renderTeachers() {
       <div class="teacher-dot" style="background:${t.color}"></div>
       <span class="teacher-name">${t.name}${t.subject?` <span style="font-size:10px;opacity:.5">· ${t.subject}</span>`:''}</span>
       <span class="teacher-count">${c}</span>
-      <span onclick="deleteTeacher('${t.id}',event)" title="刪除老師"
-        style="opacity:0;width:18px;height:18px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:11px;color:rgba(255,255,255,.5);transition:all 0.15s;flex-shrink:0;cursor:pointer"
-        onmouseover="this.style.opacity='1';this.style.background='rgba(139,74,60,.7)';this.style.color='#fff'"
-        onmouseout="this.style.opacity='0';this.style.background='';this.style.color='rgba(255,255,255,.5)'">✕</span>
+      <span class="teacher-del" onclick="deleteTeacher('${t.id}',event)" title="刪除老師"
+        style="width:20px;height:20px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;cursor:pointer;color:rgba(255,255,255,.6)">✕</span>
     </div>`;
   }).join('') || '<div style="color:rgba(255,255,255,.3);font-size:12px;padding:8px 12px">尚無老師</div>';
 }
@@ -1061,19 +1063,53 @@ function deleteTeacher(id, e) {
   if (e) e.stopPropagation();
   var t = teachers.find(function(x){ return x.id === id; });
   if (!t) return;
-  var cnt = bookings.filter(function(b){ return b.teacherId === id; }).length;
-  var warnMsg = cnt > 0
-    ? '此老師有 <strong>' + cnt + ' 筆</strong>預約記錄，刪除老師後這些預約的老師欄位將顯示為「—」。<br><span style="font-size:12px;color:var(--rust)">預約記錄本身不會被刪除。</span>'
-    : '確定要刪除老師 <strong>' + t.name + '</strong>？<br><span style="font-size:12px;color:var(--text-sub)">此操作無法復原。</span>';
-  showConfirm(
-    '刪除老師：' + t.name,
-    warnMsg,
-    function() {
-      teachers = teachers.filter(function(x){ return x.id !== id; });
-      save(); renderTeachers(); renderTeacherFilters(); renderAll();
-      toast('老師「' + t.name + '」已刪除', '🗑️');
+
+  var todayStr = new Date().toISOString().slice(0, 10);
+  var allBookings = bookings.filter(function(b){ return b.teacherId === id; });
+  var activeBookings = allBookings.filter(function(b){
+    return (b.status === 'confirmed' || b.status === 'pending') && b.date >= todayStr;
+  }).sort(function(a, b){ return (a.date + a.time).localeCompare(b.date + b.time); });
+  var completedCnt = allBookings.filter(function(b){ return b.status === 'completed'; }).length;
+  var cancelledCnt = allBookings.filter(function(b){ return b.status === 'cancelled'; }).length;
+
+  var warnMsg = '';
+
+  if (allBookings.length === 0) {
+    warnMsg = '確定要刪除老師 <strong>' + t.name + '</strong>？<br><span style="font-size:12px;color:var(--text-sub)">此操作無法復原。</span>';
+  } else {
+    // 預約統計摘要
+    warnMsg += '<div style="margin-bottom:10px;font-size:13px">刪除後，<strong>' + t.name + '</strong> 的所有預約老師欄位將顯示為「—」，預約記錄本身不會刪除。</div>';
+    warnMsg += '<div style="background:var(--cream);border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:10px">';
+    warnMsg += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:' + (activeBookings.length > 0 ? '10px' : '0') + '">';
+    warnMsg += '<span>共 <strong>' + allBookings.length + '</strong> 筆預約</span>';
+    if (completedCnt > 0) warnMsg += '<span style="color:var(--sky)">已完成 ' + completedCnt + '</span>';
+    if (cancelledCnt > 0) warnMsg += '<span style="color:var(--rust)">已取消 ' + cancelledCnt + '</span>';
+    warnMsg += '</div>';
+
+    // 進行中預約列表
+    if (activeBookings.length > 0) {
+      warnMsg += '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:6px">⚠️ 尚有 ' + activeBookings.length + ' 筆進行中預約</div>';
+      warnMsg += '<div style="display:flex;flex-direction:column;gap:4px;max-height:140px;overflow-y:auto;-webkit-overflow-scrolling:touch">';
+      activeBookings.forEach(function(b) {
+        var statusColor = b.status === 'confirmed' ? '#2d7a4a' : '#8b5e1a';
+        var statusLabel = b.status === 'confirmed' ? '已確認' : '待確認';
+        warnMsg += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)">'
+          + '<span style="font-family:DM Mono,monospace;font-size:11px;color:var(--ink);flex-shrink:0">' + b.date + '</span>'
+          + '<span style="font-family:DM Mono,monospace;font-size:11px;color:var(--text-sub);flex-shrink:0">' + b.time + '</span>'
+          + '<span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + b.name + ' · ' + b.course + '</span>'
+          + '<span style="font-size:10px;color:' + statusColor + ';flex-shrink:0">' + statusLabel + '</span>'
+          + '</div>';
+      });
+      warnMsg += '</div>';
     }
-  );
+    warnMsg += '</div>';
+  }
+
+  showConfirm('刪除老師：' + t.name, warnMsg, function() {
+    teachers = teachers.filter(function(x){ return x.id !== id; });
+    save(); renderTeachers(); renderTeacherFilters(); renderAll();
+    toast('老師「' + t.name + '」已刪除', '🗑️');
+  });
 }
 
 function getFiltered() {
@@ -1548,8 +1584,8 @@ function renderDrawerTeachers() {
       <div class="teacher-dot" style="background:${t.color}"></div>
       <span class="teacher-name">${t.name}</span>
       <span class="teacher-count">${c}</span>
-      <span onclick="deleteTeacher('${t.id}',event)" title="刪除老師"
-        style="width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:13px;color:rgba(255,255,255,.4);flex-shrink:0;cursor:pointer;background:rgba(139,74,60,0.15)">✕</span>
+      <span class="teacher-del" onclick="deleteTeacher('${t.id}',event)" title="刪除老師"
+        style="width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;cursor:pointer;color:rgba(255,255,255,.5);background:rgba(139,74,60,0.2)">✕</span>
     </div>`;
   }).join('') || '<div style="color:rgba(255,255,255,.3);font-size:12px;padding:8px 12px">尚無老師</div>';
 }
