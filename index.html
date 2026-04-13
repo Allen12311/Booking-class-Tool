@@ -908,6 +908,11 @@ function onAuthStateChanged(user) {
     stopDataListeners();
     currentGroupId = null;
     updateGroupUI();
+    // 清空所有輸入框（避免換帳號後殘留上一個帳號的資料）
+    ['joinGroupCode','newGroupName','fName','fPhone','fCourse','fSyllabus','fNotes','fMeetingUrl','tName','tSubject','fbApiKey','fbAuthDomain','fbProjectId'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.value = '';
+    });
   }
 }
 
@@ -982,17 +987,19 @@ async function createGroup() {
 async function joinGroup() {
   if (!currentUser) { toast('請先登入', '⚠️'); return; }
   if (!db) { toast('請先完成 Firebase 設定', '⚠️'); return; }
-  var code = document.getElementById('joinGroupCode').value.trim();
-  if (!code) { toast('請輸入群組代碼', '⚠️'); return; }
 
-  // 支援完整 groupId（grp_XXXXX）或去掉前綴的版本
-  var groupId = code.startsWith('grp_') ? code : ('grp_' + code);
+  // 清理輸入：移除所有空白、換行
+  var raw = document.getElementById('joinGroupCode').value.trim().replace(/\s+/g, '');
+  if (!raw) { toast('請輸入群組代碼', '⚠️'); return; }
+
+  // 重組 groupId：支援貼上數字部分或完整 grp_XXXXX
+  var groupId = raw.startsWith('grp_') ? raw : ('grp_' + raw);
 
   toast('搜尋群組中…', '🔍');
   try {
     var groupDoc = await db.collection('groups').doc(groupId).get();
     if (!groupDoc.exists) {
-      toast('找不到此群組代碼，請確認是否貼上完整代碼', '⚠️'); return;
+      toast('找不到群組，請確認代碼是否完整（從「📋 複製」按鈕取得）', '⚠️'); return;
     }
     var memberUIDs = groupDoc.data().memberUIDs || [];
     if (memberUIDs.indexOf(currentUser.uid) !== -1) {
@@ -1013,12 +1020,13 @@ async function joinGroup() {
     await db.collection('groups').doc(groupId).update(updateData);
     currentGroupId = groupId;
     document.getElementById('groupSetupOverlay').style.display = 'none';
+    document.getElementById('joinGroupCode').value = '';
     updateGroupUI();
     startDataListeners();
     toast('已加入群組：' + (groupDoc.data().name || groupId), '✅');
   } catch(e) {
     if (e.code === 'permission-denied') {
-      toast('代碼錯誤或群組不存在', '⚠️');
+      toast('代碼錯誤或無權限加入此群組', '⚠️');
     } else {
       toast('加入失敗：' + e.message, '⚠️');
     }
@@ -1055,11 +1063,25 @@ async function renderGroupMembers() {
     body.innerHTML = '<div style="background:var(--cream);border-radius:8px;padding:12px 14px;margin-bottom:16px">'
       + '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);margin-bottom:6px">邀請代碼（分享給其他人加入）</div>'
       + '<div style="display:flex;align-items:center;gap:10px">'
-      + '<span style="font-size:20px;font-weight:700;font-family:DM Mono,monospace;color:var(--gold);letter-spacing:4px">' + inviteCode + '</span>'
-      + '<button onclick="navigator.clipboard.writeText(\'' + inviteCode + '\').then(function(){toast(\'代碼已複製\',\'📋\')})" style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:#fff;cursor:pointer">📋 複製</button>'
+      + '<span id="inviteCodeDisplay" style="font-size:18px;font-weight:700;font-family:DM Mono,monospace;color:var(--gold);letter-spacing:2px;word-break:break-all">' + inviteCode + '</span>'
+      + '<button id="copyInviteBtn" style="flex-shrink:0;padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:#fff;cursor:pointer">📋 複製</button>'
       + '</div></div>'
       + '<div style="font-size:13px;font-weight:600;margin-bottom:8px">成員列表（' + Object.keys(members).length + ' 人）</div>'
       + rows;
+    // 綁定複製按鈕（避免字串拼接轉義問題）
+    var copyBtn = document.getElementById('copyInviteBtn');
+    if (copyBtn) {
+      copyBtn.onclick = function() {
+        navigator.clipboard.writeText(inviteCode).then(function() {
+          toast('代碼已複製：' + inviteCode, '📋');
+        }).catch(function() {
+          // fallback for older browsers
+          var el = document.getElementById('inviteCodeDisplay');
+          if (el) { var r = document.createRange(); r.selectNode(el); window.getSelection().removeAllRanges(); window.getSelection().addRange(r); }
+          toast('請手動複製代碼：' + inviteCode, '📋');
+        });
+      };
+    }
   } catch(e) {
     body.innerHTML = '<div style="color:var(--rust);font-size:13px">載入失敗：' + e.message + '</div>';
   }
