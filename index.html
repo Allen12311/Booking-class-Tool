@@ -137,8 +137,8 @@ tbody tr:hover { background: var(--sky-light); }
 .cal-event { font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 
 /* MODAL */
-.overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(28,25,23,0.55); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); z-index: 200; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
-.overlay.open { opacity: 1; pointer-events: all; }
+.overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(28,25,23,0.55); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); z-index: 200; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+.overlay.open { display: flex; opacity: 1; pointer-events: all; }
 .modal { background: var(--paper); border-radius: 14px; width: 600px; max-width: 95vw; max-height: 88vh; overflow-y: auto; box-shadow: var(--shadow-lg); transform: translateY(20px); transition: transform 0.25s ease; }
 .overlay.open .modal { transform: translateY(0); }
 .modal-header { padding: 24px 28px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
@@ -604,7 +604,7 @@ tbody tr:hover { background: var(--sky-light); }
 <div class="toast-container" id="toastContainer"></div>
 
 <!-- FIREBASE CONFIG MODAL -->
-<div class="overlay" id="firebaseOverlay">
+<div class="overlay" id="firebaseOverlay" style="z-index:10000">
   <div class="modal" style="width:480px;max-width:95vw">
     <div class="modal-header">
       <div><div class="modal-title">🔥 Firebase 設定</div><div class="modal-sub">Firebase Configuration</div></div>
@@ -683,7 +683,7 @@ tbody tr:hover { background: var(--sky-light); }
 
 
 <!-- LOGIN OVERLAY -->
-<div id="loginOverlay" style="position:fixed;top:0;left:0;right:0;bottom:0;background:var(--ink);z-index:1000;flex-direction:column;align-items:center;justify-content:center;pointer-events:all">
+<div id="loginOverlay" style="display:flex;position:fixed;top:0;left:0;right:0;bottom:0;background:var(--ink);z-index:9999;flex-direction:column;align-items:center;justify-content:center;pointer-events:all">
   <div style="text-align:center;color:var(--paper);max-width:360px;padding:40px 24px">
     <div id="loginLogoMark" style="font-family:'Cormorant Garamond',serif;font-size:36px;color:var(--gold);margin-bottom:8px">秘</div>
     <div id="loginLogoTitle" style="font-size:20px;font-weight:600;letter-spacing:2px;margin-bottom:8px">課程預約管理系統</div>
@@ -853,7 +853,12 @@ function getFirebaseConfig() {
 
 function initFirebase(config) {
   try {
-    if (firebase.apps.length) firebase.apps[0].delete();
+    if (typeof firebase === 'undefined') {
+      throw new Error('Firebase SDK 尚未載入，請重新整理頁面');
+    }
+    if (firebase.apps.length) {
+      firebase.apps.forEach(function(app) { app.delete(); });
+    }
     firebase.initializeApp(config);
     db = firebase.firestore();
     auth = firebase.auth();
@@ -1057,13 +1062,18 @@ function saveFirebaseConfig() {
   var authDomain = document.getElementById('fbAuthDomain').value.trim();
   var projectId = document.getElementById('fbProjectId').value.trim();
   if (!apiKey || !authDomain || !projectId) { toast('請填寫所有欄位', '⚠️'); return; }
-  var config = { apiKey, authDomain, projectId, storageBucket: projectId + '.appspot.com', appId: '1' };
+  if (typeof firebase === 'undefined') {
+    toast('Firebase SDK 尚未載入，請重新整理頁面後再試', '⚠️');
+    return;
+  }
+  var config = { apiKey: apiKey, authDomain: authDomain, projectId: projectId,
+    storageBucket: projectId + '.appspot.com', appId: '1' };
   localStorage.setItem(FIREBASE_CONFIG_KEY, JSON.stringify(config));
   if (initFirebase(config)) {
     closeModal('firebaseOverlay');
     toast('Firebase 已連線，請登入 Google 帳號', '🔥');
   } else {
-    toast('Firebase 設定錯誤，請確認資料正確', '⚠️');
+    toast('Firebase 設定錯誤，請確認 API Key / Auth Domain / Project ID 是否正確', '⚠️');
   }
 }
 
@@ -2034,22 +2044,19 @@ function renderDrawerTeachers() {
 
 document.querySelectorAll('.overlay').forEach(el=>el.addEventListener('click',e=>{if(e.target===el)closeModal(el.id);}));
 renderColorPicker();
+loadLogoSettings();
 
-// ── 啟動 Firebase ──
-(function() {
+// ── 啟動 Firebase（等待頁面與 SDK 完全載入）──
+window.addEventListener('load', function() {
   var cfg = getFirebaseConfig();
   if (cfg) {
     if (!initFirebase(cfg)) {
-      document.getElementById('loginOverlay').style.display = 'flex';
       document.getElementById('loginStatus').textContent = 'Firebase 設定有誤，請重新設定';
     }
-    // onAuthStateChanged 會在登入後自動呼叫 startDataListeners → renderAll
   } else {
-    // 沒有設定，顯示登入頁
-    document.getElementById('loginOverlay').style.display = 'flex';
     document.getElementById('loginStatus').textContent = '請先完成 Firebase 設定，再登入 Google 帳號';
   }
-})();
+});
 
 // ── 匯入/匯出（CSV only，雲端同步由 Firestore 負責）──
 let syncPendingData = null;
@@ -2443,9 +2450,6 @@ updateNotifBtn();
 if (notifEnabled && 'Notification' in window && Notification.permission === 'granted') {
   startNotifTimer();
 }
-
-// 載入 Logo 設定
-loadLogoSettings();
 
 // 頁面載入時立即執行一次，之後每分鐘檢查
 autoCompleteBookings();
