@@ -1740,15 +1740,19 @@ function gdriveInitUI() {
   var loginWrap = document.getElementById('gdriveLoginWrap');
   var input = document.getElementById('gClientIdInput');
   var display = document.getElementById('gClientIdDisplay');
+  var loggedInBtns = document.getElementById('gdriveLoggedInBtns');
   if (savedId) {
     if (input) input.value = savedId;
     if (display) display.textContent = savedId;
     if (wrap) wrap.style.display = 'none';
     if (loginWrap) loginWrap.style.display = 'block';
+    // 有 Client ID 就立即顯示編輯/刪除按鈕，不需等登入
+    if (loggedInBtns) loggedInBtns.style.display = 'flex';
     gdriveInit(savedId);
   } else {
     if (wrap) wrap.style.display = 'block';
     if (loginWrap) loginWrap.style.display = 'none';
+    if (loggedInBtns) loggedInBtns.style.display = 'none';
   }
 }
 
@@ -1822,13 +1826,14 @@ function gdriveSetStatus(loggedIn, text) {
   var dot = document.getElementById('gdriveStatusDot');
   var txt = document.getElementById('gdriveStatusText');
   var loginBtn = document.getElementById('gLoginBtn');
-  var loggedInBtns = document.getElementById('gdriveLoggedInBtns');
   var actionBtns = document.getElementById('gdriveActionBtns');
   if (dot) dot.style.background = loggedIn ? '#2d7a4a' : 'var(--border)';
   if (txt) txt.textContent = text;
   if (loginBtn) loginBtn.style.display = loggedIn ? 'none' : 'flex';
-  if (loggedInBtns) loggedInBtns.style.display = loggedIn ? 'flex' : 'none';
   if (actionBtns) actionBtns.style.display = loggedIn ? 'block' : 'none';
+  // 編輯/刪除按鈕：只要有 Client ID 就常態顯示，不依賴登入狀態
+  var loggedInBtns = document.getElementById('gdriveLoggedInBtns');
+  if (loggedInBtns) loggedInBtns.style.display = localStorage.getItem('sb_gclient_id') ? 'flex' : 'none';
 }
 
 function gdriveLogin() {
