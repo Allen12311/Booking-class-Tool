@@ -1039,54 +1039,70 @@ function openGroupManagement() {
   openModal('groupMgmtOverlay');
 }
 
+var groupMembersCache = null;
+var groupMembersCacheId = null;
+
 async function renderGroupMembers() {
   if (!currentGroupId || !db) return;
   var body = document.getElementById('groupMgmtBody');
   if (!body) return;
+
+  // 如果是同一個群組且已有快取，直接用快取渲染
+  if (groupMembersCacheId === currentGroupId && groupMembersCache) {
+    _renderMembersHTML(groupMembersCache);
+    return;
+  }
+
   body.innerHTML = '<div style="color:var(--text-sub);font-size:13px;padding:12px 0">載入中…</div>';
   try {
     var doc = await db.collection('groups').doc(currentGroupId).get();
-    var data = doc.data();
-    var members = data.members || {};
-    var inviteCode = currentGroupId.slice(4);
-    var rows = Object.entries(members).map(function(entry) {
-      var uid = entry[0], m = entry[1];
-      var isMe = uid === currentUser.uid;
-      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">'
-        + '<div style="flex:1">'
-        + '<div style="font-size:13px;font-weight:600;color:var(--ink)">' + (m.name || m.email) + (isMe ? ' <span style="font-size:10px;color:var(--gold)">（你）</span>' : '') + '</div>'
-        + '<div style="font-size:11px;color:var(--text-sub)">' + m.email + '</div>'
-        + '</div>'
-        + (!isMe ? '<button onclick="removeMember(\'' + uid + '\')" style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer;color:var(--rust)">移除</button>' : '')
-        + '</div>';
-    }).join('');
-    body.innerHTML = '<div style="background:var(--cream);border-radius:8px;padding:12px 14px;margin-bottom:16px">'
-      + '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);margin-bottom:6px">邀請代碼（分享給其他人加入）</div>'
-      + '<div style="display:flex;align-items:center;gap:10px">'
-      + '<span id="inviteCodeDisplay" style="font-size:18px;font-weight:700;font-family:DM Mono,monospace;color:var(--gold);letter-spacing:2px;word-break:break-all">' + inviteCode + '</span>'
-      + '<button id="copyInviteBtn" style="flex-shrink:0;padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:#fff;cursor:pointer">📋 複製</button>'
-      + '</div></div>'
-      + '<div style="font-size:13px;font-weight:600;margin-bottom:8px">成員列表（' + Object.keys(members).length + ' 人）</div>'
-      + rows;
-    // 綁定複製按鈕（避免字串拼接轉義問題）
-    var copyBtn = document.getElementById('copyInviteBtn');
-    if (copyBtn) {
-      copyBtn.onclick = function() {
-        navigator.clipboard.writeText(inviteCode).then(function() {
-          toast('代碼已複製：' + inviteCode, '📋');
-        }).catch(function() {
-          // fallback for older browsers
-          var el = document.getElementById('inviteCodeDisplay');
-          if (el) { var r = document.createRange(); r.selectNode(el); window.getSelection().removeAllRanges(); window.getSelection().addRange(r); }
-          toast('請手動複製代碼：' + inviteCode, '📋');
-        });
-      };
-    }
+    groupMembersCache = doc.data();
+    groupMembersCacheId = currentGroupId;
+    _renderMembersHTML(groupMembersCache);
   } catch(e) {
     body.innerHTML = '<div style="color:var(--rust);font-size:13px">載入失敗：' + e.message + '</div>';
   }
 }
 
+function _renderMembersHTML(data) {
+  var body = document.getElementById('groupMgmtBody');
+  if (!body) return;
+  var members = data.members || {};
+  var inviteCode = currentGroupId.slice(4);
+  var rows = Object.entries(members).map(function(entry) {
+    var uid = entry[0], m = entry[1];
+    var isMe = uid === currentUser.uid;
+    return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">'
+      + '<div style="flex:1">'
+      + '<div style="font-size:13px;font-weight:600;color:var(--ink)">' + (m.name || m.email) + (isMe ? ' <span style="font-size:10px;color:var(--gold)">（你）</span>' : '') + '</div>'
+      + '<div style="font-size:11px;color:var(--text-sub)">' + m.email + '</div>'
+      + '</div>'
+      + (!isMe ? '<button onclick="removeMember(\'' + uid + '\')" style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer;color:var(--rust)">移除</button>' : '')
+      + '</div>';
+  }).join('');
+  body.innerHTML = '<div style="background:var(--cream);border-radius:8px;padding:12px 14px;margin-bottom:16px">'
+    + '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);margin-bottom:6px">邀請代碼（分享給其他人加入）</div>'
+    + '<div style="display:flex;align-items:center;gap:10px">'
+    + '<span id="inviteCodeDisplay" style="font-size:18px;font-weight:700;font-family:DM Mono,monospace;color:var(--gold);letter-spacing:2px;word-break:break-all">' + inviteCode + '</span>'
+    + '<button id="copyInviteBtn" style="flex-shrink:0;padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:#fff;cursor:pointer">📋 複製</button>'
+    + '</div></div>'
+    + '<div style="font-size:13px;font-weight:600;margin-bottom:8px">成員列表（' + Object.keys(members).length + ' 人）</div>'
+    + rows;
+  var copyBtn = document.getElementById('copyInviteBtn');
+  if (copyBtn) {
+    copyBtn.onclick = function() {
+      navigator.clipboard.writeText(inviteCode).then(function() {
+        toast('代碼已複製：' + inviteCode, '📋');
+      }).catch(function() {
+        var el = document.getElementById('inviteCodeDisplay');
+        if (el) { var r = document.createRange(); r.selectNode(el); window.getSelection().removeAllRanges(); window.getSelection().addRange(r); }
+        toast('請手動複製代碼：' + inviteCode, '📋');
+      });
+    };
+  }
+}
+
+// 移除成員後清除快取
 async function removeMember(uid) {
   if (!currentGroupId || !db) return;
   showConfirm('移除成員', '確定要將此成員從群組中移除？', async function() {
@@ -1095,6 +1111,7 @@ async function removeMember(uid) {
       updateData['members.' + uid] = firebase.firestore.FieldValue.delete();
       updateData['memberUIDs'] = firebase.firestore.FieldValue.arrayRemove(uid);
       await db.collection('groups').doc(currentGroupId).update(updateData);
+      groupMembersCache = null; // 清除快取，下次重新讀取
       toast('成員已移除', '✅');
       renderGroupMembers();
     } catch(e) { toast('移除失敗：' + e.message, '⚠️'); }
@@ -1113,6 +1130,8 @@ async function leaveGroup() {
         updateData['memberUIDs'] = firebase.firestore.FieldValue.arrayRemove(currentUser.uid);
         await db.collection('groups').doc(currentGroupId).update(updateData);
         stopDataListeners();
+        groupMembersCache = null;
+        groupMembersCacheId = null;
         currentGroupId = null;
         updateGroupUI();
         closeModal('groupMgmtOverlay');
@@ -1198,7 +1217,6 @@ function startDataListeners() {
 
   unsubscribeBookings = db.collection(base + '/bookings').onSnapshot(function(snap) {
     bookings = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
-    autoCompleteBookings();
     renderTeachers();
     renderAll();
   }, function(err) { console.error('bookings listener:', err); });
@@ -2454,8 +2472,10 @@ function checkUpcomingClasses() {
 
 // ── 自動完成 ──
 // 結束時間過後，已確認的課程自動標記為已完成（每分鐘檢查一次）
+var autoCompleteRunning = false;
 async function autoCompleteBookings() {
-  if (!currentUser || !db) return;
+  if (!currentUser || !db || !currentGroupId) return;
+  if (autoCompleteRunning) return; // 防止重複執行
   var n = new Date();
   var todayStr = n.toISOString().slice(0, 10);
   var nowMins = n.getHours() * 60 + n.getMinutes();
@@ -2474,13 +2494,14 @@ async function autoCompleteBookings() {
   });
 
   if (toComplete.length === 0) return;
-  // batch update in Firestore
+  autoCompleteRunning = true;
   var base = getUserPath();
   var batch = db.batch();
   toComplete.forEach(function(id) {
     batch.update(db.collection(base + '/bookings').doc(id), { status: 'completed' });
   });
   try { await batch.commit(); } catch(e) { console.error('autoComplete error:', e); }
+  finally { autoCompleteRunning = false; }
 }
 
 // ── Logo 自訂 ──
