@@ -288,6 +288,10 @@ tbody tr:hover { background: var(--sky-light); }
   #groupBadge { display: none !important; }
   #groupMgmtBtn { display: none !important; }
   #userInfo { display: none !important; }
+  /* 手機版 header 隱藏通知鈴鐺、匯出、新增預約（FAB 已取代 + 號，功能在 Drawer） */
+  #notifBtn { display: none !important; }
+  #exportBtn { display: none !important; }
+  #newBookingBtn { display: none !important; }
 
   /* Hide sidebar, show drawer + mobile nav */
   .sidebar { display: none; }
@@ -379,13 +383,13 @@ tbody tr:hover { background: var(--sky-light); }
     <button class="btn btn-outline btn-sm" id="notifBtn" onclick="toggleNotification()" title="課程提醒通知" style="display:flex;align-items:center;gap:5px">
       <span id="notifIcon">🔔</span><span id="notifLabel" class="btn-label" style="font-size:11px">通知</span>
     </button>
-    <button class="btn btn-outline btn-sm" onclick="exportCSV()" title="匯出CSV" style="display:flex;align-items:center;gap:5px">
+    <button class="btn btn-outline btn-sm" id="exportBtn" onclick="exportCSV()" title="匯出CSV" style="display:flex;align-items:center;gap:5px">
       <span>📤</span><span class="btn-label" style="font-size:11px">匯出</span>
     </button>
     <button class="btn btn-outline btn-sm" id="authBtn" onclick="handleAuth()" style="display:flex;align-items:center;gap:5px">
       <span>👤</span><span class="btn-label" style="font-size:11px">登入</span>
     </button>
-    <button class="btn btn-gold" onclick="openNewBooking()" style="display:flex;align-items:center;gap:4px">
+    <button class="btn btn-gold" id="newBookingBtn" onclick="openNewBooking()" style="display:flex;align-items:center;gap:4px">
       <span>＋</span><span class="btn-label">新增預約</span>
     </button>
   </div>
