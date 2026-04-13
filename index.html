@@ -368,9 +368,7 @@ tbody tr:hover { background: var(--sky-light); }
       <span id="userName" class="btn-label"></span>
     </div>
     <div id="groupBadge" style="display:none;align-items:center;gap:6px;background:rgba(184,137,74,0.2);border:1px solid var(--gold-light);border-radius:4px;padding:4px 10px;font-family:'DM Mono',monospace;font-size:10px;color:var(--gold-light)"></div>
-    <button class="btn btn-outline btn-sm" id="groupMgmtBtn" onclick="openGroupManagement()" style="display:none;align-items:center;gap:5px" title="管理群組成員">
-      <span>👥</span><span class="btn-label" style="font-size:11px">成員</span>
-    </button>
+
     <button class="btn btn-outline btn-sm" id="notifBtn" onclick="toggleNotification()" title="課程提醒通知" style="display:flex;align-items:center;gap:5px">
       <span id="notifIcon">🔔</span><span id="notifLabel" class="btn-label" style="font-size:11px">通知</span>
     </button>
@@ -616,7 +614,7 @@ tbody tr:hover { background: var(--sky-light); }
       </div>
       <div class="form-row full"><div class="form-group">
         <label class="form-label">API Key *</label>
-        <input class="form-input" id="fbApiKey" placeholder="AIzaSy...">
+        <input class="form-input" id="fbApiKey" placeholder="輸入 API Key">
       </div></div>
       <div class="form-row full"><div class="form-group">
         <label class="form-label">Auth Domain *</label>
@@ -675,12 +673,12 @@ tbody tr:hover { background: var(--sky-light); }
       <button class="close-btn" onclick="closeModal('groupMgmtOverlay')">✕</button>
     </div>
     <div class="modal-body" id="groupMgmtBody" style="min-height:200px"></div>
-    <div class="modal-footer">
+    <div class="modal-footer" style="justify-content:space-between">
+      <button class="btn btn-danger btn-sm" onclick="leaveGroup()">🚪 離開群組</button>
       <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('groupMgmtOverlay')">關閉</button>
     </div>
   </div>
 </div>
-
 
 <!-- LOGIN OVERLAY -->
 <div id="loginOverlay" style="display:flex;position:fixed;top:0;left:0;right:0;bottom:0;background:var(--ink);z-index:9999;flex-direction:column;align-items:center;justify-content:center;pointer-events:all">
@@ -919,12 +917,10 @@ function showGroupSetup() {
 
 function updateGroupUI() {
   var badge = document.getElementById('groupBadge');
-  var mgmtBtn = document.getElementById('groupMgmtBtn');
   if (badge) {
     badge.textContent = currentGroupId ? ('群組: ' + currentGroupId.slice(4,12).toUpperCase()) : '';
     badge.style.display = currentGroupId ? 'flex' : 'none';
   }
-  if (mgmtBtn) mgmtBtn.style.display = currentGroupId ? 'flex' : 'none';
 }
 
 async function createGroup() {
@@ -950,80 +946,78 @@ async function createGroup() {
 }
 
 async function joinGroup() {
-  if (!db || !currentUser) return;
-  var code = document.getElementById('joinGroupCode').value.trim();
+  if (!currentUser) { toast('請先登入', '⚠️'); return; }
+  if (!db) { toast('請先完成 Firebase 設定', '⚠️'); return; }
+  var code = document.getElementById('joinGroupCode').value.trim().toUpperCase();
   if (!code) { toast('請輸入群組代碼', '⚠️'); return; }
-  // 支援完整 ID 或短代碼
-  var groupId = code.startsWith('grp_') ? code : null;
-  if (!groupId) {
-    // 搜尋短代碼（前8碼大寫）
-    var allGroups = await db.collection('groups').get();
-    var found = allGroups.docs.find(function(d) { return d.id.slice(4,12).toUpperCase() === code.toUpperCase(); });
-    if (found) groupId = found.id;
-  }
-  if (!groupId) { toast('找不到此群組代碼', '⚠️'); return; }
-  var groupDoc = await db.collection('groups').doc(groupId).get();
-  if (!groupDoc.exists) { toast('群組不存在', '⚠️'); return; }
-  // 加入群組
-  var updateData = {};
-  updateData['members.' + currentUser.uid] = { email: currentUser.email, name: currentUser.displayName || currentUser.email, joinedAt: new Date().toISOString() };
-  updateData['memberUIDs'] = firebase.firestore.FieldValue.arrayUnion(currentUser.uid);
+
+  toast('搜尋群組中…', '🔍');
+
   try {
+    // 直接用代碼重建完整 groupId 嘗試讀取
+    var groupId = 'grp_' + code.toLowerCase();
+    var groupDoc = await db.collection('groups').doc(groupId).get();
+
+    if (!groupDoc.exists) {
+      toast('找不到此群組代碼，請確認代碼是否正確', '⚠️'); return;
+    }
+    // 檢查是否已是成員
+    var memberUIDs = groupDoc.data().memberUIDs || [];
+    if (memberUIDs.indexOf(currentUser.uid) !== -1) {
+      toast('你已經是此群組成員', 'ℹ️');
+      currentGroupId = groupId;
+      document.getElementById('groupSetupOverlay').style.display = 'none';
+      updateGroupUI();
+      startDataListeners();
+      return;
+    }
+    // 加入群組
+    var updateData = {};
+    updateData['members.' + currentUser.uid] = {
+      email: currentUser.email,
+      name: currentUser.displayName || currentUser.email,
+      joinedAt: new Date().toISOString()
+    };
+    updateData['memberUIDs'] = firebase.firestore.FieldValue.arrayUnion(currentUser.uid);
     await db.collection('groups').doc(groupId).update(updateData);
     currentGroupId = groupId;
     document.getElementById('groupSetupOverlay').style.display = 'none';
     updateGroupUI();
     startDataListeners();
-    toast('已加入群組：' + (groupDoc.data().name || groupId), '✅');
-  } catch(e) { toast('加入失敗：' + e.message, '⚠️'); }
+    toast('已加入群組：' + (groupDoc.data().name || code), '✅');
+  } catch(e) {
+    if (e.code === 'permission-denied') {
+      toast('代碼錯誤或群組不存在', '⚠️');
+    } else {
+      toast('加入失敗：' + e.message, '⚠️');
+    }
+  }
 }
 
-function openGroupManagement() {
-  renderGroupMembers();
-  openModal('groupMgmtOverlay');
+async function leaveGroup() {
+  if (!currentUser || !currentGroupId || !db) return;
+  showConfirm(
+    '離開群組',
+    '確定要離開此群組嗎？<br><span style="font-size:12px;color:var(--text-sub)">離開後你將看不到群組資料，需要重新輸入代碼才能加入。</span>',
+    async function() {
+      try {
+        var updateData = {};
+        updateData['members.' + currentUser.uid] = firebase.firestore.FieldValue.delete();
+        updateData['memberUIDs'] = firebase.firestore.FieldValue.arrayRemove(currentUser.uid);
+        await db.collection('groups').doc(currentGroupId).update(updateData);
+        stopDataListeners();
+        currentGroupId = null;
+        updateGroupUI();
+        closeModal('groupMgmtOverlay');
+        showGroupSetup();
+        toast('已離開群組', '👋');
+      } catch(e) { toast('操作失敗：' + e.message, '⚠️'); }
+    },
+    '確認離開'
+  );
 }
 
-async function renderGroupMembers() {
-  if (!currentGroupId) return;
-  var doc = await db.collection('groups').doc(currentGroupId).get();
-  var data = doc.data();
-  var members = data.members || {};
-  var body = document.getElementById('groupMgmtBody');
-  var rows = Object.entries(members).map(function(entry) {
-    var uid = entry[0], m = entry[1];
-    var isMe = uid === currentUser.uid;
-    return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">'
-      + '<div style="flex:1">'
-      + '<div style="font-size:13px;font-weight:600;color:var(--ink)">' + (m.name || m.email) + (isMe ? ' <span style="font-size:10px;color:var(--gold)">（你）</span>' : '') + '</div>'
-      + '<div style="font-size:11px;color:var(--text-sub)">' + m.email + '</div>'
-      + '</div>'
-      + (!isMe ? '<button onclick="removeMember(\'' + uid + '\')" style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer;color:var(--rust)">移除</button>' : '')
-      + '</div>';
-  }).join('');
-  var inviteCode = currentGroupId.slice(4,12).toUpperCase();
-  body.innerHTML = '<div style="background:var(--cream);border-radius:8px;padding:12px 14px;margin-bottom:16px">'
-    + '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);margin-bottom:6px">邀請代碼（分享給其他人加入）</div>'
-    + '<div style="display:flex;align-items:center;gap:10px">'
-    + '<span style="font-size:20px;font-weight:700;font-family:DM Mono,monospace;color:var(--gold);letter-spacing:4px">' + inviteCode + '</span>'
-    + '<button onclick="navigator.clipboard.writeText(\'' + inviteCode + '\').then(function(){toast(\'代碼已複製\',\'📋\')})" style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:4px;background:#fff;cursor:pointer">📋 複製</button>'
-    + '</div></div>'
-    + '<div style="font-size:13px;font-weight:600;margin-bottom:8px">成員列表（' + Object.keys(members).length + ' 人）</div>'
-    + rows;
-}
 
-async function removeMember(uid) {
-  if (!currentGroupId) return;
-  showConfirm('移除成員', '確定要將此成員從群組中移除？', async function() {
-    var updateData = {};
-    updateData['members.' + uid] = firebase.firestore.FieldValue.delete();
-    updateData['memberUIDs'] = firebase.firestore.FieldValue.arrayRemove(uid);
-    try {
-      await db.collection('groups').doc(currentGroupId).update(updateData);
-      toast('成員已移除', '✅');
-      renderGroupMembers();
-    } catch(e) { toast('移除失敗：' + e.message, '⚠️'); }
-  });
-}
 
 function signInWithGoogle() {
   if (!auth) { toast('請先完成 Firebase 設定', '⚠️'); openFirebaseConfig(); return; }
@@ -1040,7 +1034,7 @@ function handleAuth() {
     showConfirm('登出', '確定要登出嗎？', function() {
       auth.signOut();
       toast('已登出', '👋');
-    });
+    }, '確認登出');
   } else {
     if (!auth) openFirebaseConfig();
     else signInWithGoogle();
@@ -1439,9 +1433,10 @@ function openDetail(id) {
   openModal('detailOverlay');
 }
 // 自訂確認 modal（取代 confirm()，相容所有瀏覽器及 file:// 開啟）
-function showConfirm(title, msg, onOk) {
+function showConfirm(title, msg, onOk, btnText) {
   document.getElementById('confirmTitle').textContent = title;
   document.getElementById('confirmMsg').innerHTML = msg;
+  document.getElementById('confirmOkBtn').textContent = btnText || '確認刪除';
   document.getElementById('confirmOkBtn').onclick = function() {
     closeModal('confirmOverlay');
     onOk();
