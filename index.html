@@ -181,7 +181,7 @@ tbody tr:hover { background: var(--sky-light); }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--gold-light); }
-#loginOverlay { display: none; }
+#loginOverlay { display: flex; }
 
 /* ── MOBILE BOTTOM NAV ── */
 .mobile-nav {
@@ -683,7 +683,7 @@ tbody tr:hover { background: var(--sky-light); }
 
 
 <!-- LOGIN OVERLAY -->
-<div id="loginOverlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:var(--ink);z-index:999;flex-direction:column;align-items:center;justify-content:center">
+<div id="loginOverlay" style="position:fixed;top:0;left:0;right:0;bottom:0;background:var(--ink);z-index:1000;flex-direction:column;align-items:center;justify-content:center;pointer-events:all">
   <div style="text-align:center;color:var(--paper);max-width:360px;padding:40px 24px">
     <div id="loginLogoMark" style="font-family:'Cormorant Garamond',serif;font-size:36px;color:var(--gold);margin-bottom:8px">秘</div>
     <div id="loginLogoTitle" style="font-size:20px;font-weight:600;letter-spacing:2px;margin-bottom:8px">課程預約管理系統</div>
