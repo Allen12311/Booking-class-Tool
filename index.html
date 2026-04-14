@@ -1687,6 +1687,29 @@ async function saveBooking() {
   }
   const obj={id:id||'b'+Date.now(),name,phone:document.getElementById('fPhone').value.trim(),teacherId:tid,status:document.getElementById('fStatus').value,mode:document.getElementById('fMode').value,assistant:document.getElementById('fAssistant').value.trim(),date,time,endTime,duration,course,syllabus:document.getElementById('fSyllabus').value.trim(),meetingUrl:document.getElementById('fMeetingUrl').value.trim(),notes:document.getElementById('fNotes').value.trim()};
 
+  // ── 防呆：同一老師同天時段衝突檢查 ──
+  const newStart = sh*60+sm;
+  const newEnd   = eh*60+em;
+  const conflict = bookings.find(function(b) {
+    if (b.teacherId !== tid) return false;           // 不同老師
+    if (b.date !== date) return false;               // 不同天
+    if (b.status === 'cancelled') return false;      // 已取消不算
+    if (b.id === id) return false;                   // 排除自己（編輯模式）
+    if (!b.endTime) return false;                    // 沒有結束時間無法比較
+    var bStart = parseInt(b.time.split(':')[0])*60 + parseInt(b.time.split(':')[1]);
+    var bEnd   = parseInt(b.endTime.split(':')[0])*60 + parseInt(b.endTime.split(':')[1]);
+    // 時段重疊：新課開始 < 舊課結束 且 新課結束 > 舊課開始
+    return newStart < bEnd && newEnd > bStart;
+  });
+  if (conflict) {
+    const t = teachers.find(function(x){ return x.id === tid; });
+    return toast(
+      (t ? t.name : '此老師') + ' 在 ' + date + ' ' + conflict.time + '~' + conflict.endTime +
+      ' 已有「' + conflict.name + ' · ' + conflict.course + '」，時段衝突無法新增',
+      '⚠️'
+    );
+  }
+
   // ── 樂觀更新：先更新本地資料，立即關閉 modal，背景寫入 Firestore ──
   const isNew = !id;
   const prevBookings = bookings.slice(); // 備份，失敗時回滾
