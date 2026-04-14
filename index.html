@@ -200,10 +200,13 @@ tbody tr:hover { background: var(--sky-light); }
 .mobile-nav-btn {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 3px; cursor: pointer; border-radius: 8px; margin: 6px 2px;
-  color: rgba(255,255,255,0.45); transition: all 0.15s; border: none; background: transparent;
+  color: rgba(255,255,255,0.45); transition: all 0.12s; border: none; background: transparent;
   font-family: 'Noto Serif TC', serif;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 .mobile-nav-btn.active { background: rgba(184,137,74,0.18); color: var(--gold-light); }
+.mobile-nav-btn:active { transform: scale(0.92); opacity: 0.8; }
 .mobile-nav-btn .mnav-icon { font-size: 20px; line-height: 1; }
 .mobile-nav-btn .mnav-label { font-size: 9px; letter-spacing: 0.5px; }
 
@@ -211,15 +214,17 @@ tbody tr:hover { background: var(--sky-light); }
 .fab {
   display: none;
   position: fixed; bottom: 78px; right: 20px;
-  width: 52px; height: 52px; border-radius: 50%;
+  width: 56px; height: 56px; border-radius: 50%;
   background: var(--gold); color: #fff;
   border: none; cursor: pointer;
-  font-size: 24px; line-height: 1;
+  font-size: 26px; line-height: 1;
   box-shadow: 0 4px 20px rgba(184,137,74,0.45);
-  z-index: 140; transition: transform 0.15s;
+  z-index: 140; transition: transform 0.12s;
   align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
-.fab:active { transform: scale(0.92); }
+.fab:active { transform: scale(0.88); }
 
 /* ── MOBILE DRAWER OVERLAY ── */
 .drawer-backdrop {
@@ -255,10 +260,12 @@ tbody tr:hover { background: var(--sky-light); }
 .booking-card {
   background: #fff; border: 1px solid var(--border);
   border-radius: 12px; padding: 14px 16px;
-  cursor: pointer; transition: box-shadow 0.15s;
+  cursor: pointer; transition: box-shadow 0.15s, transform 0.1s;
   position: relative; overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
-.booking-card:active { box-shadow: var(--shadow); }
+.booking-card:active { box-shadow: var(--shadow); transform: scale(0.985); }
 .booking-card-accent {
   position: absolute; top: 0; left: 0; bottom: 0; width: 4px;
   border-radius: 12px 0 0 12px;
@@ -1474,11 +1481,21 @@ async function saveTeacher() {
   if (!name) return toast('請輸入老師姓名','⚠️');
   if (!currentUser) return toast('請先登入', '⚠️');
   const t = { id:'t'+Date.now(), name, subject:document.getElementById('tSubject').value.trim(), color:selectedColor };
+  // 樂觀更新：先加入本地，立即關閉 modal
+  const prevTeachers = teachers.slice();
+  teachers.push(t);
+  renderTeachers();
+  renderTeacherFilters();
+  closeModal('teacherOverlay');
+  toast('已新增老師：'+name,'👤');
   try {
     await dbSetTeacher(t);
-    closeModal('teacherOverlay');
-    toast('已新增老師：'+name,'👤');
-  } catch(e) { toast('儲存失敗：'+e.message,'⚠️'); }
+  } catch(e) {
+    teachers = prevTeachers;
+    renderTeachers();
+    renderTeacherFilters();
+    toast('儲存失敗，已回復：'+e.message,'⚠️');
+  }
 }
 
 function openNewBooking(prefillDate) {
@@ -1636,30 +1653,46 @@ async function saveBooking() {
   const endTime=document.getElementById('fEndTime').value;
   const course=document.getElementById('fCourse').value.trim();
   if (!name||!tid||!date||!time||!endTime||!course) return toast('請填寫所有必要欄位（*）','⚠️');
+  if (course.length > 20) return toast('課程名稱不能超過 20 個字元（目前 ' + course.length + ' 字）','⚠️');
   if (!currentUser) return toast('請先登入', '⚠️');
   const [sh,sm]=time.split(':').map(Number);
   const [eh,em]=endTime.split(':').map(Number);
   const duration=(eh*60+em)-(sh*60+sm);
   if (duration<=0) return toast('結束時間需晚於開始時間','⚠️');
-  // 防呆：新增預約時，若為當天，上課時間不能早於現在
   const id=document.getElementById('editId').value;
-  if (!id) { // 只對「新增」做檢查，編輯不限制
+  if (!id) {
     const n = new Date();
     const todayStr = n.toISOString().slice(0,10);
     if (date === todayStr) {
       const nowMins = n.getHours()*60 + n.getMinutes();
-      const startMins = sh*60+sm;
-      if (startMins < nowMins) {
-        return toast('上課時間（' + time + '）已過，請選擇今天晚一點的時間', '⚠️');
-      }
+      if (sh*60+sm < nowMins) return toast('上課時間（' + time + '）已過，請選擇今天晚一點的時間', '⚠️');
     }
   }
   const obj={id:id||'b'+Date.now(),name,phone:document.getElementById('fPhone').value.trim(),teacherId:tid,status:document.getElementById('fStatus').value,mode:document.getElementById('fMode').value,assistant:document.getElementById('fAssistant').value.trim(),date,time,endTime,duration,course,syllabus:document.getElementById('fSyllabus').value.trim(),meetingUrl:document.getElementById('fMeetingUrl').value.trim(),notes:document.getElementById('fNotes').value.trim()};
+
+  // ── 樂觀更新：先更新本地資料，立即關閉 modal，背景寫入 Firestore ──
+  const isNew = !id;
+  const prevBookings = bookings.slice(); // 備份，失敗時回滾
+  if (isNew) {
+    bookings.push(obj);
+  } else {
+    const idx = bookings.findIndex(x => x.id === obj.id);
+    if (idx >= 0) bookings[idx] = obj;
+  }
+  renderTeachers();
+  renderAll();
+  toast(isNew ? '已新增預約：'+name+' × '+course : '預約已更新', isNew ? '📌' : '✏️');
+  closeModal('bookingOverlay');
+
+  // 背景寫入 Firestore，失敗時回滾
   try {
     await dbSetBooking(obj);
-    toast(id ? '預約已更新' : '已新增預約：'+name+' × '+course, id ? '✏️' : '📌');
-    closeModal('bookingOverlay');
-  } catch(e) { toast('儲存失敗：'+e.message,'⚠️'); }
+  } catch(e) {
+    bookings = prevBookings; // 回滾
+    renderTeachers();
+    renderAll();
+    toast('儲存失敗，已回復：' + e.message, '⚠️');
+  }
 }
 
 function openDetail(id) {
@@ -1707,11 +1740,21 @@ function deleteBooking(id) {
     '刪除預約',
     '確定要刪除 <strong>' + b.name + '</strong> 的「' + b.course + '」預約？<br><span style="font-size:12px;color:var(--text-sub)">此操作無法復原。</span>',
     async function() {
+      // 樂觀更新：先移除本地資料
+      var prevBookings = bookings.slice();
+      bookings = bookings.filter(function(x){ return x.id !== id; });
+      renderTeachers();
+      renderAll();
+      closeModal('detailOverlay');
+      toast('預約已刪除', '🗑️');
       try {
         await dbDeleteBooking(id);
-        closeModal('detailOverlay');
-        toast('預約已刪除', '🗑️');
-      } catch(e) { toast('刪除失敗：'+e.message,'⚠️'); }
+      } catch(e) {
+        bookings = prevBookings; // 回滾
+        renderTeachers();
+        renderAll();
+        toast('刪除失敗，已回復：' + e.message, '⚠️');
+      }
     }
   );
 }
@@ -1808,10 +1851,21 @@ function deleteTeacher(id, e) {
   }
 
   showConfirm('刪除老師：' + t.name, warnMsg, async function() {
+    const prevTeachers = teachers.slice();
+    teachers = teachers.filter(function(x){ return x.id !== id; });
+    renderTeachers();
+    renderTeacherFilters();
+    renderAll();
+    toast('老師「' + t.name + '」已刪除', '🗑️');
     try {
       await dbDeleteTeacher(id);
-      toast('老師「' + t.name + '」已刪除', '🗑️');
-    } catch(e) { toast('刪除失敗：'+e.message,'⚠️'); }
+    } catch(e) {
+      teachers = prevTeachers;
+      renderTeachers();
+      renderTeacherFilters();
+      renderAll();
+      toast('刪除失敗，已回復：'+e.message,'⚠️');
+    }
   });
 }
 
