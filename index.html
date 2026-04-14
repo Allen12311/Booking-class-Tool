@@ -579,7 +579,10 @@ tbody tr:hover { background: var(--sky-light); }
     <div class="nav-item" id="dnav-stats" onclick="switchNav('stats');closeDrawer()"><span class="nav-icon">📊</span> 統計總覽</div>
   </div>
   <div style="padding:8px 12px">
-    <div class="sidebar-label" style="padding:0 8px;margin-bottom:10px">老師列表</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:0 8px;margin-bottom:10px">
+      <div class="sidebar-label" style="margin:0">老師列表</div>
+      <button id="drawerClearFilter" onclick="clearTeacherFilter();closeDrawer()" style="display:none;font-size:10px;color:var(--gold-light);background:rgba(184,137,74,0.15);border:1px solid rgba(184,137,74,0.3);border-radius:4px;padding:2px 8px;cursor:pointer">✕ 清除篩選</button>
+    </div>
     <div id="drawerTeacherList"></div>
     <div class="add-teacher-btn" onclick="openAddTeacher();closeDrawer()"><span>＋</span> 新增老師</div>
   </div>
@@ -592,6 +595,7 @@ tbody tr:hover { background: var(--sky-light); }
         <button onclick="openGroupManagement();closeDrawer()" style="padding:4px 10px;font-size:11px;border:1px solid rgba(184,137,74,0.4);border-radius:4px;background:transparent;cursor:pointer;color:var(--gold-light)">👥 管理</button>
       </div>
     </div>
+    <button class="btn btn-outline btn-sm" id="drawerNotifBtn" onclick="toggleNotification();closeDrawer()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">🔔 課程通知</button>
     <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="openFirebaseConfig();closeDrawer()">🔥 Firebase 設定</button>
     <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="exportCSV();closeDrawer()">📤 匯出 CSV</button>
     <button class="btn btn-outline btn-sm" id="drawerAuthBtn" onclick="handleAuth();closeDrawer()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">👤 登入</button>
@@ -727,11 +731,14 @@ tbody tr:hover { background: var(--sky-light); }
       <button class="close-btn" onclick="closeModal('logoSettingsOverlay')">✕</button>
     </div>
     <div class="modal-body">
-      <div class="form-row full">
+      <div class="form-row">
         <div class="form-group">
           <label class="form-label">Logo 圖案文字</label>
           <input class="form-input" id="logoMarkInput" placeholder="秘" maxlength="2" oninput="updateLogoPreview()" style="font-family:'Cormorant Garamond',serif;font-size:24px;text-align:center;letter-spacing:4px">
-          <div style="font-size:11px;color:var(--text-sub);margin-top:4px">建議填入 1～2 個字，中文或英文皆可</div>
+        </div>
+        <!-- 預覽圓圈 -->
+        <div class="form-group" style="align-items:center;justify-content:center;display:flex">
+          <div id="logoPreviewMark" style="width:52px;height:52px;border:1.5px solid var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Cormorant Garamond',serif;font-size:26px;color:var(--gold);flex-shrink:0;margin-top:20px"></div>
         </div>
       </div>
       <div class="form-row full">
@@ -746,12 +753,12 @@ tbody tr:hover { background: var(--sky-light); }
           <input class="form-input" id="logoSubInput" placeholder="Schedule Manager" oninput="updateLogoPreview()" style="font-family:'DM Mono',monospace;font-size:12px">
         </div>
       </div>
-      <!-- 預覽 -->
-      <div style="background:var(--ink);border-radius:8px;padding:16px 20px;display:flex;align-items:center;gap:12px;margin-top:8px">
-        <div id="logoPreviewMark" style="width:36px;height:36px;border:1.5px solid var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Cormorant Garamond',serif;font-size:18px;color:var(--gold);flex-shrink:0"></div>
+      <!-- 精簡預覽 -->
+      <div style="background:var(--ink);border-radius:8px;padding:12px 16px;display:flex;align-items:center;gap:10px;margin-top:4px">
+        <div style="width:32px;height:32px;border:1.5px solid var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Cormorant Garamond',serif;font-size:16px;color:var(--gold);flex-shrink:0" id="logoPreviewMarkSmall"></div>
         <div>
-          <div id="logoPreviewTitle" style="font-size:14px;font-weight:600;color:#fff;letter-spacing:2px"></div>
-          <div id="logoPreviewSub" style="font-family:'DM Mono',monospace;font-size:9px;color:var(--gold-light);letter-spacing:3px;text-transform:uppercase;margin-top:2px"></div>
+          <div id="logoPreviewTitle" style="font-size:13px;font-weight:600;color:#fff;letter-spacing:1px"></div>
+          <div id="logoPreviewSub" style="font-family:'DM Mono',monospace;font-size:8px;color:var(--gold-light);letter-spacing:2px;text-transform:uppercase;margin-top:1px"></div>
         </div>
       </div>
     </div>
@@ -842,30 +849,41 @@ var unsubscribeBookings = null;
 
 // ── 閒置自動登出（1天）──
 var IDLE_TIMEOUT = 24 * 60 * 60 * 1000; // 24小時
+var IDLE_KEY = 'sb_last_active';
 var idleTimer = null;
+var idleCheckTimer = null;
 
 function resetIdleTimer() {
-  clearTimeout(idleTimer);
-  idleTimer = setTimeout(function() {
-    if (auth && currentUser) {
-      auth.signOut();
-      toast('閒置超過 1 天，已自動登出', '🔕');
-    }
-  }, IDLE_TIMEOUT);
+  // 每次有操作就更新 localStorage 的時間戳
+  localStorage.setItem(IDLE_KEY, Date.now().toString());
+}
+
+function checkIdleTimeout() {
+  if (!currentUser) return;
+  var last = parseInt(localStorage.getItem(IDLE_KEY) || '0', 10);
+  if (last > 0 && Date.now() - last > IDLE_TIMEOUT) {
+    auth.signOut();
+    toast('閒置超過 1 天，已自動登出', '🔕');
+  }
 }
 
 function startIdleTimer() {
+  // 記錄目前時間
+  localStorage.setItem(IDLE_KEY, Date.now().toString());
+  // 監聽使用者操作，更新時間戳
   ['click','keydown','touchstart','scroll'].forEach(function(ev) {
     document.addEventListener(ev, resetIdleTimer, { passive: true });
   });
-  resetIdleTimer();
+  // 每 5 分鐘檢查一次是否超過 24 小時未操作
+  if (idleCheckTimer) clearInterval(idleCheckTimer);
+  idleCheckTimer = setInterval(checkIdleTimeout, 5 * 60 * 1000);
 }
 
 function stopIdleTimer() {
-  clearTimeout(idleTimer);
   ['click','keydown','touchstart','scroll'].forEach(function(ev) {
     document.removeEventListener(ev, resetIdleTimer);
   });
+  if (idleCheckTimer) { clearInterval(idleCheckTimer); idleCheckTimer = null; }
 }
 
 function getFirebaseConfig() {
@@ -903,6 +921,8 @@ function onAuthStateChanged(user) {
     if (authBtn) { authBtn.querySelector('.btn-label').textContent = '登出'; authBtn.querySelector('span:first-child').textContent = '🚪'; }
     if (drawerAuthBtn) { drawerAuthBtn.innerHTML = '🚪 登出'; }
     startIdleTimer();
+    // 登入後立即檢查是否已超過閒置時間（處理重開頁面的情況）
+    checkIdleTimeout();
     checkUserGroup();
   } else {
     document.getElementById('loginOverlay').style.display = 'flex';
@@ -913,14 +933,18 @@ function onAuthStateChanged(user) {
     if (authBtn) { authBtn.querySelector('.btn-label').textContent = '登入'; authBtn.querySelector('span:first-child').textContent = '👤'; }
     if (drawerAuthBtn) { drawerAuthBtn.innerHTML = '👤 登入'; }
     stopIdleTimer();
+    localStorage.removeItem(IDLE_KEY);
     stopDataListeners();
     currentGroupId = null;
     updateGroupUI();
-    // 清空所有輸入框（避免換帳號後殘留上一個帳號的資料）
+    // 清空所有輸入框和篩選器（避免換帳號後殘留）
     ['joinGroupCode','newGroupName','fName','fPhone','fCourse','fSyllabus','fNotes','fMeetingUrl','tName','tSubject','fbApiKey','fbAuthDomain','fbProjectId'].forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.value = '';
     });
+    var si = document.getElementById('searchInput'); if (si) si.value = '';
+    var ft = document.getElementById('filterTeacher'); if (ft) ft.value = '';
+    var fs = document.getElementById('filterStatus'); if (fs) fs.value = '';
   }
 }
 
@@ -1205,16 +1229,25 @@ function saveFirebaseConfig() {
   }
 }
 
+var cachedBasePath = null;
+
 function getUserPath() {
-  // 改為群組路徑
   if (!currentGroupId) return null;
   return 'groups/' + currentGroupId;
 }
+
+function getCachedPath() {
+  if (!cachedBasePath && currentGroupId) cachedBasePath = 'groups/' + currentGroupId;
+  return cachedBasePath;
+}
+
+var autoCompleteInterval = null;
 
 function startDataListeners() {
   stopDataListeners();
   var base = getUserPath();
   if (!base || !db) return;
+  cachedBasePath = base;
 
   unsubscribeTeachers = db.collection(base + '/teachers').onSnapshot(function(snap) {
     teachers = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
@@ -1228,11 +1261,18 @@ function startDataListeners() {
     renderTeachers();
     renderAll();
   }, function(err) { console.error('bookings listener:', err); });
+
+  // 登入後才啟動 autoComplete interval
+  autoCompleteBookings();
+  if (autoCompleteInterval) clearInterval(autoCompleteInterval);
+  autoCompleteInterval = setInterval(autoCompleteBookings, 60000);
 }
 
 function stopDataListeners() {
   if (unsubscribeTeachers) { unsubscribeTeachers(); unsubscribeTeachers = null; }
   if (unsubscribeBookings) { unsubscribeBookings(); unsubscribeBookings = null; }
+  if (autoCompleteInterval) { clearInterval(autoCompleteInterval); autoCompleteInterval = null; }
+  cachedBasePath = null;
   teachers = [];
   bookings = [];
 }
@@ -1243,23 +1283,23 @@ async function save() {}
 async function dbSetTeacher(t) {
   if (!db || !currentUser || !currentGroupId) return;
   var data = Object.assign({}, t); var id = data.id; delete data.id;
-  await db.collection(getUserPath() + '/teachers').doc(id).set(data);
+  await db.collection((cachedBasePath || getUserPath()) + '/teachers').doc(id).set(data, { merge: true });
 }
 
 async function dbDeleteTeacher(id) {
   if (!db || !currentUser || !currentGroupId) return;
-  await db.collection(getUserPath() + '/teachers').doc(id).delete();
+  await db.collection((cachedBasePath || getUserPath()) + '/teachers').doc(id).delete();
 }
 
 async function dbSetBooking(b) {
   if (!db || !currentUser || !currentGroupId) return;
   var data = Object.assign({}, b); var id = data.id; delete data.id;
-  await db.collection(getUserPath() + '/bookings').doc(id).set(data);
+  await db.collection((cachedBasePath || getUserPath()) + '/bookings').doc(id).set(data, { merge: true });
 }
 
 async function dbDeleteBooking(id) {
   if (!db || !currentUser || !currentGroupId) return;
-  await db.collection(getUserPath() + '/bookings').doc(id).delete();
+  await db.collection((cachedBasePath || getUserPath()) + '/bookings').doc(id).delete();
 }
 
 async function dbBatchImport(importTeachers, importBookings) {
@@ -1337,7 +1377,7 @@ function switchViewBtn(v) {
 }
 
 function renderTeachers() {
-  document.getElementById('teacherList').innerHTML = teachers.map(t => {
+  const html = teachers.map(t => {
     const c = bookings.filter(b=>b.teacherId===t.id).length;
     return `<div class="teacher-chip" onclick="filterByTeacher('${t.id}')">
       <div class="teacher-dot" style="background:${t.color}"></div>
@@ -1347,6 +1387,21 @@ function renderTeachers() {
         style="width:20px;height:20px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;cursor:pointer;color:rgba(255,255,255,.6)">✕</span>
     </div>`;
   }).join('') || '<div style="color:rgba(255,255,255,.3);font-size:12px;padding:8px 12px">尚無老師</div>';
+  document.getElementById('teacherList').innerHTML = html;
+  // 同步更新 Drawer 老師列表（手機版即時同步）
+  const drawerList = document.getElementById('drawerTeacherList');
+  if (drawerList) {
+    drawerList.innerHTML = teachers.map(t => {
+      const c = bookings.filter(b => b.teacherId === t.id).length;
+      return `<div class="teacher-chip" onclick="filterByTeacher('${t.id}');closeDrawer()">
+        <div class="teacher-dot" style="background:${t.color}"></div>
+        <span class="teacher-name">${t.name}</span>
+        <span class="teacher-count">${c}</span>
+        <span class="teacher-del" onclick="deleteTeacher('${t.id}',event)" title="刪除老師"
+          style="width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;cursor:pointer;color:rgba(255,255,255,.5);background:rgba(139,74,60,0.2)">✕</span>
+      </div>`;
+    }).join('') || '<div style="color:rgba(255,255,255,.3);font-size:12px;padding:8px 12px">尚無老師</div>';
+  }
 }
 function renderTeacherFilters() {
   const opts = teachers.map(t=>`<option value="${t.id}">${t.name}${t.subject?' ('+t.subject+')':''}</option>`).join('');
@@ -1355,6 +1410,16 @@ function renderTeacherFilters() {
 }
 function filterByTeacher(id) {
   document.getElementById('filterTeacher').value = id;
+  // 同步顯示 Drawer 的清除篩選按鈕
+  var clearBtn = document.getElementById('drawerClearFilter');
+  if (clearBtn) clearBtn.style.display = id ? 'block' : 'none';
+  renderAll();
+}
+
+function clearTeacherFilter() {
+  document.getElementById('filterTeacher').value = '';
+  var clearBtn = document.getElementById('drawerClearFilter');
+  if (clearBtn) clearBtn.style.display = 'none';
   renderAll();
 }
 
@@ -1926,9 +1991,12 @@ function renderStats() {
           + '<div class="booking-card-meta">'
           + '<div class="booking-card-meta-item"><span>📅</span>' + b.date + '</div>'
           + '<div class="booking-card-meta-item"><span>🕐</span>' + b.time + (b.endTime ? ' ~ ' + b.endTime : '') + '</div>'
+          + '<div class="booking-card-meta-item"><div style="width:7px;height:7px;border-radius:50%;background:' + (tt?tt.color:'#ccc') + '"></div>' + (tt?tt.name:'—') + '</div>'
           + '<div class="booking-card-meta-item">' + (b.mode==='線上' ? '💻 線上' : b.mode==='線上+實體' ? '🏫💻 線上+實體' : '🏫 實體') + '</div>'
           + '</div>'
+          + (b.meetingUrl ? '<div style="margin-top:5px;font-size:10px;color:var(--sky)">🔗 線上連結已設定</div>' : '')
           + (b.syllabus ? '<div style="margin-top:6px;font-size:11px;color:var(--text-sub);background:var(--cream);padding:5px 8px;border-radius:5px">' + b.syllabus.slice(0,60) + (b.syllabus.length>60?'…':'') + '</div>' : '')
+          + (b.notes ? '<div style="margin-top:4px;font-size:11px;color:var(--text-sub);background:var(--cream);padding:5px 8px;border-radius:5px">' + b.notes.slice(0,60) + (b.notes.length>60?'…':'') + '</div>' : '')
           + '</div></div>';
       });
       detailHtml = '<div class="section-header" style="margin-top:28px">'
@@ -2151,23 +2219,10 @@ function exportTeacherCSV(tid) {
 function openDrawer() {
   document.getElementById('mobileDrawer').classList.add('open');
   document.getElementById('drawerBackdrop').classList.add('open');
-  renderDrawerTeachers();
 }
 function closeDrawer() {
   document.getElementById('mobileDrawer').classList.remove('open');
   document.getElementById('drawerBackdrop').classList.remove('open');
-}
-function renderDrawerTeachers() {
-  document.getElementById('drawerTeacherList').innerHTML = teachers.map(t => {
-    const c = bookings.filter(b => b.teacherId === t.id).length;
-    return `<div class="teacher-chip" onclick="filterByTeacher('${t.id}');closeDrawer()">
-      <div class="teacher-dot" style="background:${t.color}"></div>
-      <span class="teacher-name">${t.name}</span>
-      <span class="teacher-count">${c}</span>
-      <span class="teacher-del" onclick="deleteTeacher('${t.id}',event)" title="刪除老師"
-        style="width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;cursor:pointer;color:rgba(255,255,255,.5);background:rgba(139,74,60,0.2)">✕</span>
-    </div>`;
-  }).join('') || '<div style="color:rgba(255,255,255,.3);font-size:12px;padding:8px 12px">尚無老師</div>';
 }
 
 document.querySelectorAll('.overlay').forEach(el=>el.addEventListener('click',e=>{if(e.target===el)closeModal(el.id);}));
@@ -2336,7 +2391,8 @@ function renderNotifSettings() {
     if (list.length === 0) return '<div style="color:var(--text-sub);font-size:13px;padding:6px 0">' + label + '無排課</div>';
     return list.map(function(b) {
       const t = teachers.find(function(x) { return x.id === b.teacherId; });
-      const dayKey = 'day_' + b.date + '_' + b.id;
+      // 統一 key 格式：前一天通知用 day_日期，當天提醒用 min_日期_時間_id
+      const dayKey = 'day_' + dateStr;
       const minKey = 'min_' + b.date + '_' + b.time + '_' + b.id;
       const notified = notifiedSet.has(dayKey) || notifiedSet.has(minKey);
       return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">'
@@ -2398,7 +2454,10 @@ function disableNotif() {
 
 function startNotifTimer() {
   stopNotifTimer();
-  checkUpcomingClasses();
+  // 延遲 3 秒讓 onSnapshot 資料先載入，再做第一次檢查
+  setTimeout(function() {
+    checkUpcomingClasses();
+  }, 3000);
   notifTimer = setInterval(checkUpcomingClasses, 60000);
 }
 
@@ -2425,26 +2484,24 @@ function checkUpcomingClasses() {
   const nowMins = hh * 60 + mm;
   const todayStr = n.toISOString().slice(0, 10);
 
-  // ── 前一天通知：每天晚上整點時推送明日課程 ──
-  if (hh === NOTIF_EVENING_HOUR && mm === 0) {
+  // ── 前一天通知：每天晚上 20:00~20:05 推送明日課程（5分鐘視窗，避免整點被跳過）──
+  if (hh === NOTIF_EVENING_HOUR && mm < 5) {
     const tomorrow = new Date(n); tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+    const dayKey = 'day_' + tomorrowStr;   // 統一格式，不含 booking id
     const tomorrowClasses = bookings.filter(function(b) {
       return b.date === tomorrowStr && b.status !== 'cancelled';
     }).sort(function(a, b) { return a.time.localeCompare(b.time); });
 
-    if (tomorrowClasses.length > 0) {
-      const dayKey = 'day_' + tomorrowStr;
-      if (!notifiedSet.has(dayKey)) {
-        const lines = tomorrowClasses.map(function(b) {
-          const t = teachers.find(function(x) { return x.id === b.teacherId; });
-          return (t ? t.name : '—') + '　' + b.time + '　' + b.course + '（' + b.name + '）';
-        });
-        const title = '📅 明日課程提醒（共 ' + tomorrowClasses.length + ' 堂）';
-        const body = lines.join('\n');
-        sendNotif(title, body, dayKey);
-        toast('明日共 ' + tomorrowClasses.length + ' 堂課，通知已發送', '📅');
-      }
+    if (tomorrowClasses.length > 0 && !notifiedSet.has(dayKey)) {
+      const lines = tomorrowClasses.map(function(b) {
+        const t = teachers.find(function(x) { return x.id === b.teacherId; });
+        return (t ? t.name : '—') + '　' + b.time + '　' + b.course + '（' + b.name + '）';
+      });
+      const title = '📅 明日課程提醒（共 ' + tomorrowClasses.length + ' 堂）';
+      const body = lines.join('\n');
+      sendNotif(title, body, dayKey);
+      toast('明日共 ' + tomorrowClasses.length + ' 堂課，通知已發送', '📅');
     }
   }
 
@@ -2537,6 +2594,8 @@ function applyLogoSettings(s) {
   var el6 = document.getElementById('loginLogoMark'); if (el6) el6.textContent = mark;
   var el7 = document.getElementById('loginLogoTitle'); if (el7) el7.textContent = title;
   var el8 = document.getElementById('loginLogoSub'); if (el8) el8.textContent = sub.toUpperCase();
+  // Page title
+  document.title = title;
 }
 
 function openLogoSettings() {
@@ -2552,21 +2611,25 @@ function updateLogoPreview() {
   var mark = document.getElementById('logoMarkInput').value || '秘';
   var title = document.getElementById('logoTitleInput').value || '課程預約管理系統';
   var sub = document.getElementById('logoSubInput').value || 'Schedule Manager';
-  document.getElementById('logoPreviewMark').textContent = mark;
-  document.getElementById('logoPreviewTitle').textContent = title;
-  document.getElementById('logoPreviewSub').textContent = sub.toUpperCase();
+  var pm = document.getElementById('logoPreviewMark'); if (pm) pm.textContent = mark;
+  var pms = document.getElementById('logoPreviewMarkSmall'); if (pms) pms.textContent = mark;
+  var pt = document.getElementById('logoPreviewTitle'); if (pt) pt.textContent = title;
+  var ps = document.getElementById('logoPreviewSub'); if (ps) ps.textContent = sub.toUpperCase();
 }
 
 function saveLogoSettings() {
+  var markVal = document.getElementById('logoMarkInput').value.trim();
+  var titleVal = document.getElementById('logoTitleInput').value.trim();
+  var subVal = document.getElementById('logoSubInput').value.trim();
   var s = {
-    mark: document.getElementById('logoMarkInput').value.trim() || '秘',
-    title: document.getElementById('logoTitleInput').value.trim() || '課程預約管理系統',
-    sub: document.getElementById('logoSubInput').value.trim() || 'Schedule Manager'
+    mark: markVal || '秘',
+    title: titleVal || '課程預約管理系統',
+    sub: subVal || 'Schedule Manager'
   };
   localStorage.setItem(LOGO_STORAGE_KEY, JSON.stringify(s));
   applyLogoSettings(s);
   closeModal('logoSettingsOverlay');
-  toast('Logo 已更新', '✏️');
+  toast('Logo 已更新為「' + s.mark + '」', '✏️');
 }
 
 function resetLogoSettings() {
@@ -2581,10 +2644,6 @@ updateNotifBtn();
 if (notifEnabled && 'Notification' in window && Notification.permission === 'granted') {
   startNotifTimer();
 }
-
-// 頁面載入時立即執行一次，之後每分鐘檢查
-autoCompleteBookings();
-setInterval(autoCompleteBookings, 60000);
 </script>
 </body>
 </html>
