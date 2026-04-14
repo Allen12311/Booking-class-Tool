@@ -430,8 +430,8 @@ tbody tr:hover { background: var(--sky-light); }
         </select>
         <select class="filter-select" id="filterStatus" onchange="renderAll()">
           <option value="">所有狀態</option>
-          <option value="confirmed">待確認</option>
-          <option value="pending">已確認</option>
+          <option value="pending">待確認</option>
+          <option value="confirmed">已確認</option>
           <option value="completed">已完成</option>
           <option value="cancelled">已取消</option>
         </select>
@@ -471,8 +471,8 @@ tbody tr:hover { background: var(--sky-light); }
       <div class="form-row">
         <div class="form-group"><label class="form-label">預約狀態</label>
           <select class="form-select" id="fStatus">
-            <option value="confirmed">待確認</option>
-            <option value="pending">已確認</option>
+            <option value="pending">待確認</option>
+            <option value="confirmed">已確認</option>
             <option value="completed">已完成</option>
             <option value="cancelled">已取消</option>
           </select>
@@ -1916,8 +1916,8 @@ function renderAll() {
 function quickStats() {
   return `
     <div class="stat-card gold"><div class="stat-label">總預約數</div><div class="stat-value">${bookings.length}</div><div class="stat-sub">所有老師合計</div></div>
-    <div class="stat-card sky"><div class="stat-label">已確認</div><div class="stat-value">${bookings.filter(b=>b.status==='confirmed').length}</div><div class="stat-sub">等待上課</div></div>
     <div class="stat-card rust"><div class="stat-label">待確認</div><div class="stat-value">${bookings.filter(b=>b.status==='pending').length}</div><div class="stat-sub">需要處理</div></div>
+    <div class="stat-card sky"><div class="stat-label">已確認</div><div class="stat-value">${bookings.filter(b=>b.status==='confirmed').length}</div><div class="stat-sub">等待上課</div></div>
     <div class="stat-card sage"><div class="stat-label">已完成</div><div class="stat-value">${bookings.filter(b=>b.status==='completed').length}</div><div class="stat-sub">本期結束</div></div>`;
 }
 
@@ -2179,8 +2179,8 @@ function renderStats() {
     + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px">'
     + (function() {
         var cards = [
-          { status:'confirmed', label:'已確認', color:'#2d7a4a', bg:'#e6f4ec' },
           { status:'pending',   label:'待確認', color:'#8b5e1a', bg:'#fef3e2' },
+          { status:'confirmed', label:'已確認', color:'#2d7a4a', bg:'#e6f4ec' },
           { status:'completed', label:'已完成', color:'var(--sky)', bg:'var(--sky-light)' },
           { status:'cancelled', label:'已取消', color:'var(--rust)', bg:'#fde8e8' }
         ];
