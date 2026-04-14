@@ -2077,10 +2077,10 @@ function renderStats() {
       subLine = '<span style="color:var(--ink)">' + sm[statsStatusFilter] + ' ' + tb.length + ' 堂</span>';
     } else {
       var cancelledCnt = tbAll.filter(function(b){ return b.status === 'cancelled'; }).length;
-      subLine = '<span style="color:#2d7a4a">確認 ' + tb.filter(function(b){return b.status==='confirmed';}).length + '</span> · '
-        + '<span style="color:var(--sky)">完成 ' + tb.filter(function(b){return b.status==='completed';}).length + '</span> · '
-        + '<span style="color:#8b5e1a">待確認 ' + tb.filter(function(b){return b.status==='pending';}).length + '</span>'
-        + (cancelledCnt > 0 ? ' · <span style="color:var(--rust)">取消 ' + cancelledCnt + '</span>' : '');
+      subLine = '<span style="color:#8b5e1a">待確認 ' + tb.filter(function(b){return b.status==='pending';}).length + '</span> · '
+        + '<span style="color:#2d7a4a">已確認 ' + tb.filter(function(b){return b.status==='confirmed';}).length + '</span> · '
+        + '<span style="color:var(--sky)">已完成 ' + tb.filter(function(b){return b.status==='completed';}).length + '</span>'
+        + (cancelledCnt > 0 ? ' · <span style="color:var(--text-sub)">已取消 ' + cancelledCnt + '</span>' : '');
     }
     tCardsHtml += '<div class="stat-card" style="border-left:4px solid ' + t.color + ';cursor:pointer;' + (isSelected ? 'box-shadow:0 0 0 2px ' + t.color + ';' : '') + '" onclick="selectStatsTeacher(\'' + t.id + '\')">'
       + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
