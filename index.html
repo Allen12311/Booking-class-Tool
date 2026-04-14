@@ -1487,7 +1487,7 @@ function openNewBooking(prefillDate) {
   document.getElementById('fName').value='';
   document.getElementById('fPhone').value='';
   document.getElementById('fTeacher').value='';
-  document.getElementById('fStatus').value='confirmed';
+  document.getElementById('fStatus').value='pending';
   document.getElementById('fMode').value='實體';
   document.getElementById('fAssistant').value='';
   document.getElementById('fDate').value=prefillDate||now.toISOString().slice(0,10);
@@ -1595,7 +1595,19 @@ async function saveBooking() {
   const [eh,em]=endTime.split(':').map(Number);
   const duration=(eh*60+em)-(sh*60+sm);
   if (duration<=0) return toast('結束時間需晚於開始時間','⚠️');
+  // 防呆：新增預約時，若為當天，上課時間不能早於現在
   const id=document.getElementById('editId').value;
+  if (!id) { // 只對「新增」做檢查，編輯不限制
+    const n = new Date();
+    const todayStr = n.toISOString().slice(0,10);
+    if (date === todayStr) {
+      const nowMins = n.getHours()*60 + n.getMinutes();
+      const startMins = sh*60+sm;
+      if (startMins < nowMins) {
+        return toast('上課時間（' + time + '）已過，請選擇今天晚一點的時間', '⚠️');
+      }
+    }
+  }
   const obj={id:id||'b'+Date.now(),name,phone:document.getElementById('fPhone').value.trim(),teacherId:tid,status:document.getElementById('fStatus').value,mode:document.getElementById('fMode').value,assistant:document.getElementById('fAssistant').value.trim(),date,time,endTime,duration,course,syllabus:document.getElementById('fSyllabus').value.trim(),meetingUrl:document.getElementById('fMeetingUrl').value.trim(),notes:document.getElementById('fNotes').value.trim()};
   try {
     await dbSetBooking(obj);
