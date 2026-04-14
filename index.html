@@ -848,6 +848,7 @@ tbody tr:hover { background: var(--sky-light); }
 <script>
 // ── Firebase 設定 ──
 var FIREBASE_CONFIG_KEY = 'sb_firebase_config';
+var LOGO_STORAGE_KEY = 'sb_logo';
 var db = null;
 var auth = null;
 var currentUser = null;
@@ -2706,8 +2707,6 @@ async function autoCompleteBookings() {
 }
 
 // ── Logo 自訂 ──
-var LOGO_STORAGE_KEY = 'sb_logo';
-
 function loadLogoSettings() {
   try {
     var saved = JSON.parse(localStorage.getItem(LOGO_STORAGE_KEY) || 'null');
