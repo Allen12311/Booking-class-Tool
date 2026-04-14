@@ -2250,8 +2250,8 @@ function renderStats() {
   // 頂部總覽卡（跟著期間+篩選）
   var html = '<div class="stats-row">'
     + '<div class="stat-card gold"><div class="stat-label">' + (statsStatusFilter ? {confirmed:'已確認',pending:'待確認',completed:'已完成',cancelled:'已取消'}[statsStatusFilter] : '期間課程') + '</div><div class="stat-value">' + displayBookings.length + '</div><div class="stat-sub">' + periodLabel + '</div></div>'
-    + '<div class="stat-card sky"><div class="stat-label">已確認</div><div class="stat-value">' + displayBookings.filter(function(b){return b.status==='confirmed';}).length + '</div><div class="stat-sub">等待上課</div></div>'
     + '<div class="stat-card rust"><div class="stat-label">待確認</div><div class="stat-value">' + displayBookings.filter(function(b){return b.status==='pending';}).length + '</div><div class="stat-sub">需要處理</div></div>'
+    + '<div class="stat-card sky"><div class="stat-label">已確認</div><div class="stat-value">' + displayBookings.filter(function(b){return b.status==='confirmed';}).length + '</div><div class="stat-sub">等待上課</div></div>'
     + '<div class="stat-card sage"><div class="stat-label">已完成</div><div class="stat-value">' + displayBookings.filter(function(b){return b.status==='completed';}).length + '</div><div class="stat-sub">本期結束</div></div>'
     + '</div>';
 
