@@ -176,6 +176,7 @@ tbody tr:hover { background: var(--sky-light); }
 .toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 500; display: flex; flex-direction: column; gap: 8px; }
 .toast { background: var(--ink); color: var(--paper); padding: 12px 18px; border-radius: 8px; font-size: 13px; box-shadow: var(--shadow-lg); border-left: 3px solid var(--gold); animation: slideIn 0.25s ease; display: flex; align-items: center; gap: 8px; }
 @keyframes slideIn { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -1256,17 +1257,24 @@ function startDataListeners() {
   if (!base || !db) return;
   cachedBasePath = base;
 
+  var teachersReady = false;
+  var bookingsReady = false;
+  showLoadingState(); // 顯示載入中
+
   unsubscribeTeachers = db.collection(base + '/teachers').onSnapshot(function(snap) {
     teachers = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
+    teachersReady = true;
     renderTeachers();
     renderTeacherFilters();
-    renderAll();
+    // 兩份資料都到齊才 render，避免初次載入閃爍
+    if (bookingsReady) renderAll();
   }, function(err) { console.error('teachers listener:', err); });
 
   unsubscribeBookings = db.collection(base + '/bookings').onSnapshot(function(snap) {
     bookings = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
+    bookingsReady = true;
     renderTeachers();
-    renderAll();
+    if (teachersReady) renderAll();
   }, function(err) { console.error('bookings listener:', err); });
 
   // 登入後才啟動 autoComplete interval
@@ -1879,6 +1887,15 @@ function getFiltered() {
     if (q) { const t=teachers.find(x=>x.id===b.teacherId); if (![b.name,b.course,b.notes,b.syllabus,safeGet(t,'name','')].join(' ').toLowerCase().includes(q)) return false; }
     return true;
   });
+}
+
+function showLoadingState() {
+  var c = document.getElementById('mainContent');
+  if (!c) return;
+  c.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;gap:16px">'
+    + '<div style="width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:spin 0.8s linear infinite"></div>'
+    + '<div style="font-size:13px;color:var(--text-sub)">載入資料中…</div>'
+    + '</div>';
 }
 
 function renderAll() {
@@ -2523,7 +2540,6 @@ function renderNotifSettings() {
     + '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:8px">狀態</div>'
     + '<div style="display:flex;align-items:center;justify-content:space-between">'
     + '<span style="font-size:13px;color:' + statusColor + ';font-weight:600">' + statusText + '</span>'
-    + '<span style="font-size:11px;color:var(--text-sub)">瀏覽器權限：' + permText + '</span>'
     + '</div></div>'
     + '<div style="background:var(--cream);border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:var(--text-sub);line-height:1.7">'
     + '📅 <strong style="color:var(--ink)">前一天通知</strong>：每天晚上 ' + NOTIF_EVENING_HOUR + ' 點推送明日課程摘要<br>'
