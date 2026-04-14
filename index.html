@@ -1345,6 +1345,14 @@ let calYear = now.getFullYear(), calMonth = now.getMonth();
 let currentView = 'table';
 
 // 跨瀏覽器安全取值（替代 optional chaining ?.）
+// 取本地日期字串（YYYY-MM-DD），避免 toISOString() UTC 偏移造成台灣時區日期錯誤
+function localDateStr(d) {
+  var dt = d || new Date();
+  return dt.getFullYear() + '-'
+    + String(dt.getMonth() + 1).padStart(2, '0') + '-'
+    + String(dt.getDate()).padStart(2, '0');
+}
+
 function safeGet(obj, key, fallback) {
   return (obj && obj[key] != null) ? obj[key] : (fallback !== undefined ? fallback : '');
 }
@@ -1517,7 +1525,7 @@ function openNewBooking(prefillDate) {
   document.getElementById('fAssistant').value='';
 
   var n = new Date();
-  var todayStr = n.toISOString().slice(0,10);
+  var todayStr = localDateStr(n);
   var selectedDate = prefillDate || todayStr;
   document.getElementById('fDate').value = selectedDate;
 
@@ -1580,7 +1588,7 @@ function onDateChange() {
   var dateEl = document.getElementById('fDate');
   var timeEl = document.getElementById('fTime');
   var n = new Date();
-  var todayStr = n.toISOString().slice(0,10);
+  var todayStr = localDateStr(n);
   if (dateEl.value === todayStr) {
     var nowHH = String(n.getHours()).padStart(2,'0');
     var nowMM = String(n.getMinutes()).padStart(2,'0');
@@ -1670,7 +1678,7 @@ async function saveBooking() {
   const id=document.getElementById('editId').value;
   if (!id) {
     const n = new Date();
-    const todayStr = n.toISOString().slice(0,10);
+    const todayStr = localDateStr(n);
     if (date === todayStr) {
       const nowMins = n.getHours()*60 + n.getMinutes();
       if (sh*60+sm < nowMins) return toast('上課時間（' + time + '）已過，請選擇今天晚一點的時間', '⚠️');
@@ -1773,7 +1781,7 @@ function deleteTeacher(id, e) {
   if (!t) return;
 
   var now = new Date();
-  var todayStr = now.toISOString().slice(0, 10);
+  var todayStr = localDateStr(now);
   var nowMins = now.getHours() * 60 + now.getMinutes();
 
   var allBookings = bookings.filter(function(b){ return b.teacherId === id; });
@@ -2223,7 +2231,7 @@ function exportTeacherCSV(tid) {
   const t = teachers.find(x => x.id === tid);
   const list = periodBookings_cache.filter(b => b.teacherId === tid)
     .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
-  downloadCSV(buildCSV(list), (t ? t.name : '老師') + '_預約記錄_' + now.toISOString().slice(0,10) + '.csv');
+  downloadCSV(buildCSV(list), (t ? t.name : '老師') + '_預約記錄_' + localDateStr(now) + '.csv');
   toast('已匯出 ' + (t ? t.name : '') + ' 的預約資料（' + list.length + ' 筆）', '📤');
 }
 
@@ -2231,7 +2239,7 @@ function renderCalendar() {
   const mn=['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'];
   const dn=['日','一','二','三','四','五','六'];
   const first=new Date(calYear,calMonth,1), last=new Date(calYear,calMonth+1,0);
-  const startDay=first.getDay(), todayStr=now.toISOString().slice(0,10);
+  const startDay=first.getDay(), todayStr=localDateStr(now);
   const ft=document.getElementById('filterTeacher').value;
   const fs=document.getElementById('filterStatus').value;
   let cells='';
@@ -2332,7 +2340,7 @@ function exportCSV() {
   const fs = document.getElementById('filterStatus').value;
   const q  = document.getElementById('searchInput').value.trim();
   const hasFilter = ft || fs || q;
-  downloadCSV(buildCSV(list), (hasFilter ? '篩選後_' : '') + '預約記錄_' + now.toISOString().slice(0,10) + '.csv');
+  downloadCSV(buildCSV(list), (hasFilter ? '篩選後_' : '') + '預約記錄_' + localDateStr(now) + '.csv');
   toast('已匯出 ' + list.length + ' 筆預約記錄', '📤');
 }
 
@@ -2340,7 +2348,7 @@ function exportTeacherCSV(tid) {
   const t = teachers.find(x => x.id === tid);
   const list = periodBookings_cache.filter(b => b.teacherId === tid)
     .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
-  downloadCSV(buildCSV(list), (t ? t.name : '老師') + '_預約記錄_' + now.toISOString().slice(0,10) + '.csv');
+  downloadCSV(buildCSV(list), (t ? t.name : '老師') + '_預約記錄_' + localDateStr(now) + '.csv');
   toast('已匯出 ' + (t ? t.name : '') + ' 的預約資料（' + list.length + ' 筆）', '📤');
 }
 
@@ -2380,7 +2388,7 @@ function exportConfig() {
   var json = JSON.stringify(config, null, 2);
   var a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
-  a.download = '課程預約_設定檔_' + now.toISOString().slice(0, 10) + '.json';
+  a.download = '課程預約_設定檔_' + localDateStr(now) + '.json';
   a.click();
   toast('設定檔已匯出', '📦');
 }
@@ -2510,8 +2518,8 @@ function renderNotifSettings() {
   // 明日課程（前一天通知預覽）
   const today = new Date();
   const tomorrowDate = new Date(today); tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-  const tomorrowStr = tomorrowDate.toISOString().slice(0, 10);
-  const todayStr = today.toISOString().slice(0, 10);
+  const tomorrowStr = localDateStr(tomorrowDate);
+  const todayStr = localDateStr(today);
 
   function courseRows(dateStr, label) {
     const list = bookings.filter(function(b) {
@@ -2610,12 +2618,12 @@ function checkUpcomingClasses() {
   const hh = n.getHours();
   const mm = n.getMinutes();
   const nowMins = hh * 60 + mm;
-  const todayStr = n.toISOString().slice(0, 10);
+  const todayStr = localDateStr(n);
 
   // ── 前一天通知：每天晚上 20:00~20:05 推送明日課程（5分鐘視窗，避免整點被跳過）──
   if (hh === NOTIF_EVENING_HOUR && mm < 5) {
     const tomorrow = new Date(n); tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+    const tomorrowStr = localDateStr(tomorrow);
     const dayKey = 'day_' + tomorrowStr;   // 統一格式，不含 booking id
     const tomorrowClasses = bookings.filter(function(b) {
       return b.date === tomorrowStr && b.status !== 'cancelled';
@@ -2654,7 +2662,7 @@ function checkUpcomingClasses() {
 
   // 清理過期 key（非今天與明天之前的）
   const tomorrow2 = new Date(n); tomorrow2.setDate(tomorrow2.getDate() + 1);
-  const tomorrowStr2 = tomorrow2.toISOString().slice(0, 10);
+  const tomorrowStr2 = localDateStr(tomorrow2);
   const toDelete = [];
   notifiedSet.forEach(function(k) {
     if (!k.includes(todayStr) && !k.includes(tomorrowStr2)) toDelete.push(k);
@@ -2670,7 +2678,7 @@ async function autoCompleteBookings() {
   if (!currentUser || !db || !currentGroupId) return;
   if (autoCompleteRunning) return; // 防止重複執行
   var n = new Date();
-  var todayStr = n.toISOString().slice(0, 10);
+  var todayStr = localDateStr(n);
   var nowMins = n.getHours() * 60 + n.getMinutes();
   var toComplete = [];
 
