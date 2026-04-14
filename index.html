@@ -475,7 +475,7 @@ tbody tr:hover { background: var(--sky-light); }
         <div class="form-group"><label class="form-label">課程名稱 *</label><input class="form-input" id="fCourse" placeholder="e.g. 英文口說 / 程式設計"></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label class="form-label">上課日期 *</label><input class="form-input" id="fDate" type="date"></div>
+        <div class="form-group"><label class="form-label">上課日期 *</label><input class="form-input" id="fDate" type="date" onchange="onDateChange()"></div>
         <div class="form-group"><label class="form-label">上課時間 *</label><input class="form-input" id="fTime" type="time" onchange="onStartTimeChange()"></div>
       </div>
       <div class="form-row">
@@ -1490,10 +1490,35 @@ function openNewBooking(prefillDate) {
   document.getElementById('fStatus').value='pending';
   document.getElementById('fMode').value='實體';
   document.getElementById('fAssistant').value='';
-  document.getElementById('fDate').value=prefillDate||now.toISOString().slice(0,10);
-  document.getElementById('fTime').value='10:00';
-  document.getElementById('fEndTime').value='11:00';
-  document.getElementById('fDurationHint').textContent='課程時長：60 分鐘';
+
+  var n = new Date();
+  var todayStr = n.toISOString().slice(0,10);
+  var selectedDate = prefillDate || todayStr;
+  document.getElementById('fDate').value = selectedDate;
+
+  // 計算預設開始時間：若為今天，設為當前時間往後推 1 小時（取整點）；否則預設 10:00
+  var defaultTime, defaultEndTime;
+  if (selectedDate === todayStr) {
+    var nextH = n.getHours() + 1;
+    if (nextH >= 24) nextH = 23; // 最晚 23:00
+    defaultTime = String(nextH).padStart(2,'0') + ':00';
+    var endH = nextH + 1;
+    if (endH >= 24) endH = 23;
+    defaultEndTime = String(endH).padStart(2,'0') + ':00';
+    // 設定 min 限制，不能選當前時間之前
+    var nowHH = String(n.getHours()).padStart(2,'0');
+    var nowMM = String(n.getMinutes()).padStart(2,'0');
+    document.getElementById('fTime').min = nowHH + ':' + nowMM;
+  } else {
+    defaultTime = '10:00';
+    defaultEndTime = '11:00';
+    document.getElementById('fTime').min = '';
+  }
+  document.getElementById('fTime').value = defaultTime;
+  document.getElementById('fEndTime').value = defaultEndTime;
+  var diff = (parseInt(defaultEndTime) - parseInt(defaultTime)) || 60;
+  document.getElementById('fDurationHint').textContent = '課程時長：60 分鐘';
+
   document.getElementById('fCourse').value='';
   document.getElementById('fSyllabus').value='';
   document.getElementById('fMeetingUrl').value='';
@@ -1526,6 +1551,27 @@ function openEditBooking(id) {
   closeModal('detailOverlay');
   openModal('bookingOverlay');
 }
+function onDateChange() {
+  var dateEl = document.getElementById('fDate');
+  var timeEl = document.getElementById('fTime');
+  var n = new Date();
+  var todayStr = n.toISOString().slice(0,10);
+  if (dateEl.value === todayStr) {
+    var nowHH = String(n.getHours()).padStart(2,'0');
+    var nowMM = String(n.getMinutes()).padStart(2,'0');
+    timeEl.min = nowHH + ':' + nowMM;
+    // 若目前選的時間已早於現在，自動往後推到下一個整點
+    if (timeEl.value && timeEl.value <= nowHH + ':' + nowMM) {
+      var nextH = n.getHours() + 1;
+      if (nextH >= 24) nextH = 23;
+      timeEl.value = String(nextH).padStart(2,'0') + ':00';
+      autoCalcDuration();
+    }
+  } else {
+    timeEl.min = '';
+  }
+}
+
 function onStartTimeChange() {
   const startEl = document.getElementById('fTime');
   const endEl   = document.getElementById('fEndTime');
