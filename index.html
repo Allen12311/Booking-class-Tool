@@ -911,6 +911,8 @@ function initFirebase(config) {
     db = firebase.firestore();
     auth = firebase.auth();
     auth.onAuthStateChanged(onAuthStateChanged);
+    // 處理 signInWithRedirect 回應
+    checkRedirectResult();
     return true;
   } catch(e) { console.error('Firebase init error:', e); return false; }
 }
@@ -1186,13 +1188,82 @@ async function leaveGroup() {
 
 
 
+var signInRetryCount = 0;
+var MAX_SIGN_IN_RETRY = 2;
+
 function signInWithGoogle() {
   if (!auth) { toast('請先完成 Firebase 設定', '⚠️'); openFirebaseConfig(); return; }
-  document.getElementById('loginStatus').textContent = '登入中...';
+  var statusEl = document.getElementById('loginStatus');
+  var loginBtn = document.querySelector('#loginOverlay button[onclick*="signInWithGoogle"]');
+  statusEl.textContent = '登入中，請稍候…';
+  if (loginBtn) { loginBtn.disabled = true; loginBtn.style.opacity = '0.6'; }
+
   var provider = new firebase.auth.GoogleAuthProvider();
-  auth.signInWithPopup(provider).catch(function(err) {
-    document.getElementById('loginStatus').textContent = '登入失敗：' + err.message;
-    toast('登入失敗：' + err.message, '⚠️');
+  provider.setCustomParameters({ prompt: 'select_account' });
+
+  auth.signInWithPopup(provider)
+    .then(function() {
+      signInRetryCount = 0;
+      if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
+    })
+    .catch(function(err) {
+      if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
+      signInRetryCount++;
+      var code = err.code || '';
+      var msg = '';
+
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        // 用戶自己關閉，不顯示錯誤
+        statusEl.textContent = '登入已取消，請再次點擊登入';
+        return;
+      } else if (code === 'auth/popup-blocked') {
+        // 彈窗被瀏覽器封鎖，改用重新導向
+        msg = '彈窗被封鎖，改用頁面跳轉方式登入…';
+        statusEl.textContent = msg;
+        setTimeout(function() {
+          auth.signInWithRedirect(provider).catch(function(e2) {
+            statusEl.textContent = '登入失敗，請重試';
+          });
+        }, 1000);
+        return;
+      } else if (code === 'auth/network-request-failed') {
+        msg = '網路連線失敗，請確認網路後重試';
+      } else if (code === 'auth/too-many-requests') {
+        msg = '登入請求過於頻繁，請稍後再試';
+      } else if (code === 'auth/user-disabled') {
+        msg = '此帳號已被停用';
+      } else if (code === 'auth/timeout' || code === 'auth/internal-error') {
+        // Timeout：自動重試一次
+        if (signInRetryCount <= MAX_SIGN_IN_RETRY) {
+          msg = '連線逾時，自動重試中（' + signInRetryCount + '/' + MAX_SIGN_IN_RETRY + '）…';
+          statusEl.textContent = msg;
+          setTimeout(signInWithGoogle, 2000);
+          return;
+        } else {
+          signInRetryCount = 0;
+          msg = '連線逾時，請確認網路後再試，或重新整理頁面';
+        }
+      } else {
+        msg = '登入失敗，請重試（' + code + '）';
+      }
+
+      statusEl.textContent = msg;
+      toast(msg, '⚠️');
+    });
+}
+
+// 處理 signInWithRedirect 的回應（頁面重新載入後）
+function checkRedirectResult() {
+  if (!auth) return;
+  auth.getRedirectResult().then(function(result) {
+    if (result && result.user) {
+      // redirect 登入成功，onAuthStateChanged 會自動處理後續
+      toast('Google 登入成功', '✅');
+    }
+  }).catch(function(err) {
+    if (err.code && err.code !== 'auth/no-current-user') {
+      document.getElementById('loginStatus').textContent = '登入失敗，請重試';
+    }
   });
 }
 
