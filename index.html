@@ -1408,7 +1408,7 @@ async function dbBatchImport(importTeachers, importBookings) {
   await batch.commit();
 }
 
-const COLORS = ['#b8894a','#3d6b8c','#6b7c6e','#8b4a3c','#5a6e8c','#7c6b8a','#4a7c6b','#8c7a4a','#6b8c5a','#8c5a6b'];
+const COLORS = ['#b8894a','#FF8F8F','#FFB067','#FAD678','#9ED38E','#84C1FF','#B9B9FF','#D194C2','#B766AD','#8C5A6B'];
 let selectedColor = COLORS[0];
 let teachers = [];
 let bookings = [];
@@ -1568,6 +1568,11 @@ async function saveTeacher() {
   const name = document.getElementById('tName').value.trim();
   if (!name) return toast('請輸入老師姓名','⚠️');
   if (!currentUser) return toast('請先登入', '⚠️');
+  // 防呆：名稱不能重複
+  const duplicate = teachers.find(function(t) {
+    return t.name === name;
+  });
+  if (duplicate) return toast('已有同名老師「' + name + '」，請使用不同名稱', '⚠️');
   const t = { id:'t'+Date.now(), name, subject:document.getElementById('tSubject').value.trim(), color:selectedColor };
   // 樂觀更新：先加入本地，立即關閉 modal
   const prevTeachers = teachers.slice();
