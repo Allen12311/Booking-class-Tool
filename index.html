@@ -899,17 +899,20 @@ function getFirebaseConfig() {
   try { return JSON.parse(localStorage.getItem(FIREBASE_CONFIG_KEY) || 'null'); } catch(e) { return null; }
 }
 
-function initFirebase(config) {
+async function initFirebase(config) {
   try {
     if (typeof firebase === 'undefined') {
       throw new Error('Firebase SDK 尚未載入，請重新整理頁面');
     }
+    // 若已有 app 存在，等待完全刪除後再重建（app.delete() 是非同步）
     if (firebase.apps.length) {
-      firebase.apps.forEach(function(app) { app.delete(); });
+      await Promise.all(firebase.apps.map(function(app) { return app.delete(); }));
     }
     firebase.initializeApp(config);
     db = firebase.firestore();
     auth = firebase.auth();
+    // 明確設定登入狀態持久化為 LOCAL（存在 IndexedDB，關閉瀏覽器重開仍保持登入）
+    await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
     auth.onAuthStateChanged(onAuthStateChanged);
     // 處理 signInWithRedirect 回應
     checkRedirectResult();
@@ -1294,7 +1297,7 @@ function openFirebaseConfig() {
   openModal('firebaseOverlay');
 }
 
-function saveFirebaseConfig() {
+async function saveFirebaseConfig() {
   var apiKey = document.getElementById('fbApiKey').value.trim();
   var authDomain = document.getElementById('fbAuthDomain').value.trim();
   var projectId = document.getElementById('fbProjectId').value.trim();
@@ -1304,9 +1307,10 @@ function saveFirebaseConfig() {
     return;
   }
   var config = { apiKey: apiKey, authDomain: authDomain, projectId: projectId,
-    storageBucket: projectId + '.appspot.com', appId: '1' };
+    storageBucket: projectId + '.firebasestorage.app' };
   localStorage.setItem(FIREBASE_CONFIG_KEY, JSON.stringify(config));
-  if (initFirebase(config)) {
+  var ok = await initFirebase(config);
+  if (ok) {
     closeModal('firebaseOverlay');
     toast('Firebase 已連線，請登入 Google 帳號', '🔥');
   } else {
@@ -1413,7 +1417,7 @@ async function dbBatchImport(importTeachers, importBookings) {
   await batch.commit();
 }
 
-const COLORS = ['#FF8F8F','#FFB067','#FAD678','#9ED38E','#84C1FF','#B9B9FF','#D194C2','#B766AD','#8C5A6B','#b8894a'];
+const COLORS = ['#b8894a','#FF8F8F','#FFB067','#FAD678','#9ED38E','#84C1FF','#B9B9FF','#D194C2','#B766AD','#8C5A6B'];
 let selectedColor = COLORS[0];
 let teachers = [];
 let bookings = [];
@@ -2472,10 +2476,11 @@ renderColorPicker();
 loadLogoSettings();
 
 // ── 啟動 Firebase（等待頁面與 SDK 完全載入）──
-window.addEventListener('load', function() {
+window.addEventListener('load', async function() {
   var cfg = getFirebaseConfig();
   if (cfg) {
-    if (!initFirebase(cfg)) {
+    var ok = await initFirebase(cfg);
+    if (!ok) {
       document.getElementById('loginStatus').textContent = 'Firebase 設定有誤，請重新設定';
     }
   } else {
