@@ -962,18 +962,23 @@ function onAuthStateChanged(user) {
 // ── 群組管理 ──
 async function checkUserGroup() {
   if (!db || !currentUser) return;
-  // 查詢此用戶所屬的群組
-  var snap = await db.collection('groups')
-    .where('memberUIDs', 'array-contains', currentUser.uid)
-    .limit(1).get();
-  if (!snap.empty) {
-    var doc = snap.docs[0];
-    currentGroupId = doc.id;
-    updateGroupUI();
-    startDataListeners();
-  } else {
-    // 沒有群組，顯示群組設定頁
-    showGroupSetup();
+  try {
+    var snap = await db.collection('groups')
+      .where('memberUIDs', 'array-contains', currentUser.uid)
+      .limit(1).get();
+    if (!snap.empty) {
+      var doc = snap.docs[0];
+      currentGroupId = doc.id;
+      updateGroupUI();
+      startDataListeners();
+    } else {
+      showGroupSetup();
+    }
+  } catch(e) {
+    console.error('checkUserGroup error:', e);
+    var statusEl = document.getElementById('loginStatus');
+    if (statusEl) statusEl.textContent = '載入群組失敗，請確認網路後重新整理頁面';
+    toast('載入群組失敗，請確認網路連線', '⚠️');
   }
 }
 
@@ -1408,7 +1413,7 @@ async function dbBatchImport(importTeachers, importBookings) {
   await batch.commit();
 }
 
-const COLORS = ['#b8894a','#FF8F8F','#FFB067','#FAD678','#9ED38E','#84C1FF','#B9B9FF','#D194C2','#B766AD','#8C5A6B'];
+const COLORS = ['#FF8F8F','#FFB067','#FAD678','#9ED38E','#84C1FF','#B9B9FF','#D194C2','#B766AD','#8C5A6B','#b8894a'];
 let selectedColor = COLORS[0];
 let teachers = [];
 let bookings = [];
@@ -2339,7 +2344,7 @@ function renderCalendar() {
   const mn=['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'];
   const dn=['日','一','二','三','四','五','六'];
   const first=new Date(calYear,calMonth,1), last=new Date(calYear,calMonth+1,0);
-  const startDay=first.getDay(), todayStr=localDateStr(now);
+  const startDay=first.getDay(), todayStr=localDateStr(new Date());
   const ft=document.getElementById('filterTeacher').value;
   const fs=document.getElementById('filterStatus').value;
   let cells='';
@@ -2542,7 +2547,7 @@ async function importConfig() {
 let notifEnabled = localStorage.getItem('sb_notif') === 'true';
 let notifAdvance = parseInt(localStorage.getItem('sb_notif_advance') || '15', 10);
 let notifTimer = null;
-const notifiedSet = new Set(JSON.parse(localStorage.getItem('sb_notified') || '[]'));
+const notifiedSet = new Set((function(){ try { return JSON.parse(localStorage.getItem('sb_notified') || '[]'); } catch(e) { return []; } })());
 // 提前幾分鐘通知的選項
 // 通知設定：前一天晚上幾點發送前一天通知
 const NOTIF_EVENING_HOUR = 20; // 晚上 8 點
@@ -2796,7 +2801,8 @@ async function autoCompleteBookings() {
 
   if (toComplete.length === 0) return;
   autoCompleteRunning = true;
-  var base = getUserPath();
+  var base = cachedBasePath || getUserPath();
+  if (!base) { autoCompleteRunning = false; return; }
   var batch = db.batch();
   toComplete.forEach(function(id) {
     batch.update(db.collection(base + '/bookings').doc(id), { status: 'completed' });
@@ -2810,10 +2816,7 @@ function loadLogoSettings() {
   try {
     var saved = JSON.parse(localStorage.getItem(LOGO_STORAGE_KEY) || 'null');
     if (saved) applyLogoSettings(saved);
-  } catch(e) {}
-}
-
-function applyLogoSettings(s) {
+  } catch(e) { console.warn('loadLogoSettings error:', e); localStorage.removeItem(LOGO_STORAGE_KEY); }
   var mark = s.mark || '秘';
   var title = s.title || '課程預約管理系統';
   var sub = s.sub || 'Schedule Manager';
@@ -2833,7 +2836,8 @@ function applyLogoSettings(s) {
 }
 
 function openLogoSettings() {
-  var saved = JSON.parse(localStorage.getItem(LOGO_STORAGE_KEY) || '{}');
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LOGO_STORAGE_KEY) || '{}'); } catch(e) {}
   document.getElementById('logoMarkInput').value = saved.mark || '秘';
   document.getElementById('logoTitleInput').value = saved.title || '課程預約管理系統';
   document.getElementById('logoSubInput').value = saved.sub || 'Schedule Manager';
