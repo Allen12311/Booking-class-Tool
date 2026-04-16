@@ -726,7 +726,7 @@ tbody tr:hover { background: var(--sky-light); }
       <img src="https://www.google.com/favicon.ico" style="width:18px;height:18px"> 使用 Google 帳號登入
     </button>
     <div style="margin-top:24px">
-      <button onclick="openFirebaseConfig()" style="background:transparent;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.5);border-radius:6px;padding:8px 16px;font-size:12px;cursor:pointer">⚙️ Firebase 設定</button>
+      <button id="firebaseConfigBtn" onclick="openFirebaseConfig()" style="background:transparent;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.5);border-radius:6px;padding:8px 16px;font-size:12px;cursor:pointer;display:none">⚙️ Firebase 設定</button>
     </div>
   </div>
 </div>
@@ -847,6 +847,14 @@ tbody tr:hover { background: var(--sky-light); }
 
 <script>
 // ── Firebase 設定 ──
+// ▼▼▼ 將你的 Firebase 設定填入此處，填好後用戶永遠不需要手動設定 ▼▼▼
+var BUILT_IN_FIREBASE_CONFIG = {
+  apiKey:     'AIzaSyAP56ZIvb9KMZz0e-UIvh3ZIuAMczacJ0U',
+  authDomain: 'firbasetest-e7918.firebaseapp.com',
+  projectId:  'firbasetest-e7918'
+};
+// ▲▲▲ 三個欄位都填好後，清除快取也不需要重新連線 ▲▲▲
+
 var FIREBASE_CONFIG_KEY = 'sb_firebase_config';
 var LOGO_STORAGE_KEY = 'sb_logo';
 var db = null;
@@ -896,6 +904,19 @@ function stopIdleTimer() {
 }
 
 function getFirebaseConfig() {
+  // 優先使用內建設定（填在程式碼頂部的 BUILT_IN_FIREBASE_CONFIG）
+  if (BUILT_IN_FIREBASE_CONFIG &&
+      BUILT_IN_FIREBASE_CONFIG.apiKey &&
+      BUILT_IN_FIREBASE_CONFIG.authDomain &&
+      BUILT_IN_FIREBASE_CONFIG.projectId) {
+    return {
+      apiKey:         BUILT_IN_FIREBASE_CONFIG.apiKey,
+      authDomain:     BUILT_IN_FIREBASE_CONFIG.authDomain,
+      projectId:      BUILT_IN_FIREBASE_CONFIG.projectId,
+      storageBucket:  BUILT_IN_FIREBASE_CONFIG.projectId + '.firebasestorage.app'
+    };
+  }
+  // 備用：從 localStorage 讀取（舊裝置或手動設定的情況）
   try { return JSON.parse(localStorage.getItem(FIREBASE_CONFIG_KEY) || 'null'); } catch(e) { return null; }
 }
 
@@ -993,13 +1014,26 @@ async function checkUserGroup() {
 
 function showGroupSetup() {
   var closeBtn = document.getElementById('groupSetupCloseBtn');
-  // 只有在已有群組的情況下才顯示關閉按鈕（例如：想加入另一個群組）
-  if (closeBtn) closeBtn.style.display = currentGroupId ? 'flex' : 'none';
+  // 登入後無群組時也顯示關閉按鈕，讓用戶可以先瀏覽系統
+  if (closeBtn) closeBtn.style.display = 'flex';
   document.getElementById('groupSetupOverlay').style.display = 'flex';
 }
 
 function closeGroupSetup() {
   document.getElementById('groupSetupOverlay').style.display = 'none';
+  // 記錄「用戶關閉了群組設定但尚未加入群組」
+  if (!currentGroupId) {
+    sessionStorage.setItem('sb_group_dismissed', '1');
+  }
+}
+
+function checkGroupRequired() {
+  // 切換頁面或操作時，若無群組且曾關閉過提示，再次提醒
+  if (!currentGroupId && currentUser) {
+    showGroupSetup();
+    return false; // 攔截操作
+  }
+  return true;
 }
 
 function updateGroupUI() {
@@ -1480,6 +1514,11 @@ function switchNav(v) {
   statsSelectedTeacher = '';
   // 統計頁隱藏 toolbar
   document.querySelector('.toolbar').style.display = v === 'stats' ? 'none' : '';
+  // 切換頁面時，若登入了但還沒加入群組，提醒用戶
+  if (currentUser && !currentGroupId) {
+    showGroupSetup();
+    return;
+  }
   renderAll();
 }
 function switchViewBtn(v) {
@@ -1607,6 +1646,7 @@ async function saveTeacher() {
 }
 
 function openNewBooking(prefillDate) {
+  if (currentUser && !currentGroupId) { showGroupSetup(); return; }
   document.getElementById('editId').value='';
   document.getElementById('modalTitle').textContent='新增預約';
   document.getElementById('fName').value='';
@@ -2488,9 +2528,13 @@ window.addEventListener('load', async function() {
     var ok = await initFirebase(cfg);
     if (!ok) {
       document.getElementById('loginStatus').textContent = 'Firebase 設定有誤，請重新設定';
+      var btn = document.getElementById('firebaseConfigBtn');
+      if (btn) btn.style.display = 'inline-block';
     }
   } else {
     document.getElementById('loginStatus').textContent = '請先完成 Firebase 設定，再登入 Google 帳號';
+    var btn = document.getElementById('firebaseConfigBtn');
+    if (btn) btn.style.display = 'inline-block';
   }
 });
 
