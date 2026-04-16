@@ -849,9 +849,9 @@ tbody tr:hover { background: var(--sky-light); }
 // ── Firebase 設定 ──
 // ▼▼▼ 將你的 Firebase 設定填入此處，填好後用戶永遠不需要手動設定 ▼▼▼
 var BUILT_IN_FIREBASE_CONFIG = {
-  apiKey:      '',
-  authDomain:  '',
-  projectId:   ''
+  apiKey:     '',
+  authDomain: '',
+  projectId:  ''
 };
 // ▲▲▲ 三個欄位都填好後，清除快取也不需要重新連線 ▲▲▲
 
@@ -2915,6 +2915,9 @@ function loadLogoSettings() {
     var saved = JSON.parse(localStorage.getItem(LOGO_STORAGE_KEY) || 'null');
     if (saved) applyLogoSettings(saved);
   } catch(e) { console.warn('loadLogoSettings error:', e); localStorage.removeItem(LOGO_STORAGE_KEY); }
+}
+
+function applyLogoSettings(s) {
   var mark = s.mark || '秘';
   var title = s.title || '課程預約管理系統';
   var sub = s.sub || 'Schedule Manager';
