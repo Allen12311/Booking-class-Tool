@@ -911,11 +911,17 @@ async function initFirebase(config) {
     firebase.initializeApp(config);
     db = firebase.firestore();
     auth = firebase.auth();
-    // 明確設定登入狀態持久化為 LOCAL（存在 IndexedDB，關閉瀏覽器重開仍保持登入）
-    await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+    // ⚠️ 必須先註冊 onAuthStateChanged，再做 setPersistence
+    // Firebase 在 initializeApp 後立即從 IndexedDB 讀取已儲存的登入狀態
+    // 若 setPersistence await 導致 observer 延遲被註冊，初始的已登入狀態會被錯過
     auth.onAuthStateChanged(onAuthStateChanged);
     // 處理 signInWithRedirect 回應
     checkRedirectResult();
+    // setPersistence 影響的是「下一次登入」時的儲存方式，不影響已儲存狀態的讀取
+    // 所以可以放在 onAuthStateChanged 之後再設定
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(e) {
+      console.warn('setPersistence error:', e);
+    });
     return true;
   } catch(e) { console.error('Firebase init error:', e); return false; }
 }
