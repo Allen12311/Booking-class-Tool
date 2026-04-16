@@ -921,6 +921,7 @@ function getFirebaseConfig() {
 }
 
 async function initFirebase(config) {
+  firebaseInitializing = true;
   try {
     if (typeof firebase === 'undefined') {
       throw new Error('Firebase SDK 尚未載入，請重新整理頁面');
@@ -936,19 +937,18 @@ async function initFirebase(config) {
     firebase.initializeApp(config);
     db = firebase.firestore();
     auth = firebase.auth();
-    // ⚠️ 必須先註冊 onAuthStateChanged，再做 setPersistence
-    // Firebase 在 initializeApp 後立即從 IndexedDB 讀取已儲存的登入狀態
-    // 若 setPersistence await 導致 observer 延遲被註冊，初始的已登入狀態會被錯過
     auth.onAuthStateChanged(onAuthStateChanged);
-    // 處理 signInWithRedirect 回應
     checkRedirectResult();
-    // setPersistence 影響的是「下一次登入」時的儲存方式，不影響已儲存狀態的讀取
-    // 所以可以放在 onAuthStateChanged 之後再設定
     auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(e) {
       console.warn('setPersistence error:', e);
     });
     return true;
-  } catch(e) { console.error('Firebase init error:', e); return false; }
+  } catch(e) {
+    console.error('Firebase init error:', e);
+    return false;
+  } finally {
+    firebaseInitializing = false;
+  }
 }
 
 function onAuthStateChanged(user) {
@@ -1319,35 +1319,29 @@ function checkRedirectResult() {
   });
 }
 
+var firebaseInitializing = false; // 追蹤 initFirebase 是否正在執行中
+
 function handleAuth() {
   if (currentUser) {
     showConfirm('登出', '確定要登出嗎？', function() {
       auth.signOut();
       toast('已登出', '👋');
     }, '確認登出');
-  } else {
-    if (!auth) {
-      // auth 為 null 代表 initFirebase 尚未完成，嘗試重新初始化
-      var cfg = getFirebaseConfig();
-      if (cfg) {
-        var loginStatusEl = document.getElementById('loginStatus');
-        if (loginStatusEl) loginStatusEl.textContent = '連線中，請稍候…';
-        initFirebase(cfg).then(function(ok) {
-          if (ok) {
-            signInWithGoogle();
-          } else {
-            if (loginStatusEl) loginStatusEl.textContent = 'Firebase 連線失敗，請重新設定';
-            var btn = document.getElementById('firebaseConfigBtn');
-            if (btn) btn.style.display = 'inline-block';
-          }
-        });
-      } else {
-        openFirebaseConfig();
-      }
-    } else {
-      signInWithGoogle();
-    }
+    return;
   }
+  // Firebase 正在初始化中，等一下再試
+  if (firebaseInitializing) {
+    var statusEl = document.getElementById('loginStatus');
+    if (statusEl) statusEl.textContent = 'Firebase 連線中，請稍候…';
+    setTimeout(handleAuth, 800);
+    return;
+  }
+  // auth 為 null 代表尚未設定或初始化失敗
+  if (!auth) {
+    openFirebaseConfig();
+    return;
+  }
+  signInWithGoogle();
 }
 
 function openFirebaseConfig() {
@@ -2548,12 +2542,21 @@ loadLogoSettings();
 window.addEventListener('load', async function() {
   var cfg = getFirebaseConfig();
   if (cfg) {
+    var statusEl = document.getElementById('loginStatus');
+    if (statusEl) statusEl.textContent = 'Firebase 連線中…';
     var ok = await initFirebase(cfg);
     if (!ok) {
-      document.getElementById('loginStatus').textContent = 'Firebase 設定有誤，請重新設定';
+      if (statusEl) statusEl.textContent = 'Firebase 連線失敗，請重新設定';
+    } else {
+      // initFirebase 成功，loginStatus 會由 onAuthStateChanged 接手更新
+      // 若幾秒後仍在「連線中」說明 onAuthStateChanged 還沒觸發（正常現象）
+      if (statusEl && statusEl.textContent === 'Firebase 連線中…') {
+        statusEl.textContent = '請點擊下方按鈕以 Google 帳號登入';
+      }
     }
   } else {
-    document.getElementById('loginStatus').textContent = '請先完成 Firebase 設定，再登入 Google 帳號';
+    var statusEl = document.getElementById('loginStatus');
+    if (statusEl) statusEl.textContent = '請先完成 Firebase 設定，再登入 Google 帳號';
   }
 });
 
