@@ -726,7 +726,7 @@ tbody tr:hover { background: var(--sky-light); }
       <img src="https://www.google.com/favicon.ico" style="width:18px;height:18px"> 使用 Google 帳號登入
     </button>
     <div style="margin-top:24px">
-      <button id="firebaseConfigBtn" onclick="openFirebaseConfig()" style="background:transparent;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.5);border-radius:6px;padding:8px 16px;font-size:12px;cursor:pointer;display:none">⚙️ Firebase 設定</button>
+      <button id="firebaseConfigBtn" onclick="openFirebaseConfig()" style="background:transparent;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.5);border-radius:6px;padding:8px 16px;font-size:12px;cursor:pointer">⚙️ Firebase 設定</button>
     </div>
   </div>
 </div>
@@ -849,9 +849,9 @@ tbody tr:hover { background: var(--sky-light); }
 // ── Firebase 設定 ──
 // ▼▼▼ 將你的 Firebase 設定填入此處，填好後用戶永遠不需要手動設定 ▼▼▼
 var BUILT_IN_FIREBASE_CONFIG = {
-  apiKey:     'AIzaSyAP56ZIvb9KMZz0e-UIvh3ZIuAMczacJ0U',
-  authDomain: 'firbasetest-e7918.firebaseapp.com',
-  projectId:  'firbasetest-e7918'
+  apiKey:      '',
+  authDomain:  '',
+  projectId:   ''
 };
 // ▲▲▲ 三個欄位都填好後，清除快取也不需要重新連線 ▲▲▲
 
@@ -925,9 +925,13 @@ async function initFirebase(config) {
     if (typeof firebase === 'undefined') {
       throw new Error('Firebase SDK 尚未載入，請重新整理頁面');
     }
-    // 若已有 app 存在，等待完全刪除後再重建（app.delete() 是非同步）
+    // 若已有 app 存在，嘗試刪除後再重建；若刪除失敗直接跳過
     if (firebase.apps.length) {
-      await Promise.all(firebase.apps.map(function(app) { return app.delete(); }));
+      try {
+        await Promise.all(firebase.apps.map(function(app) { return app.delete(); }));
+      } catch(delErr) {
+        console.warn('app.delete() failed, continuing:', delErr);
+      }
     }
     firebase.initializeApp(config);
     db = firebase.firestore();
@@ -1322,8 +1326,27 @@ function handleAuth() {
       toast('已登出', '👋');
     }, '確認登出');
   } else {
-    if (!auth) openFirebaseConfig();
-    else signInWithGoogle();
+    if (!auth) {
+      // auth 為 null 代表 initFirebase 尚未完成，嘗試重新初始化
+      var cfg = getFirebaseConfig();
+      if (cfg) {
+        var loginStatusEl = document.getElementById('loginStatus');
+        if (loginStatusEl) loginStatusEl.textContent = '連線中，請稍候…';
+        initFirebase(cfg).then(function(ok) {
+          if (ok) {
+            signInWithGoogle();
+          } else {
+            if (loginStatusEl) loginStatusEl.textContent = 'Firebase 連線失敗，請重新設定';
+            var btn = document.getElementById('firebaseConfigBtn');
+            if (btn) btn.style.display = 'inline-block';
+          }
+        });
+      } else {
+        openFirebaseConfig();
+      }
+    } else {
+      signInWithGoogle();
+    }
   }
 }
 
@@ -2528,13 +2551,9 @@ window.addEventListener('load', async function() {
     var ok = await initFirebase(cfg);
     if (!ok) {
       document.getElementById('loginStatus').textContent = 'Firebase 設定有誤，請重新設定';
-      var btn = document.getElementById('firebaseConfigBtn');
-      if (btn) btn.style.display = 'inline-block';
     }
   } else {
     document.getElementById('loginStatus').textContent = '請先完成 Firebase 設定，再登入 Google 帳號';
-    var btn = document.getElementById('firebaseConfigBtn');
-    if (btn) btn.style.display = 'inline-block';
   }
 });
 
