@@ -968,6 +968,7 @@ async function initFirebase(config) {
 }
 
 function onAuthStateChanged(user) {
+  console.log('[Auth] onAuthStateChanged:', user ? ('已登入 ' + user.email) : 'null（未登入）');
   currentUser = user;
   if (user) {
     document.getElementById('loginOverlay').style.display = 'none';
@@ -1290,12 +1291,19 @@ function checkRedirectResult() {
   if (!auth) return;
   auth.getRedirectResult().then(function(result) {
     if (result && result.user) {
-      // redirect 登入成功，onAuthStateChanged 會自動處理後續
-      toast('Google 登入成功', '✅');
+      console.log('[Firebase] getRedirectResult 成功:', result.user.email);
+      // getRedirectResult 成功後 onAuthStateChanged 會自動觸發
+      // 但為保險起見，直接隱藏登入頁
+      var loginOverlay = document.getElementById('loginOverlay');
+      if (loginOverlay) loginOverlay.style.display = 'none';
+    } else {
+      console.log('[Firebase] getRedirectResult: 無 redirect 登入');
     }
   }).catch(function(err) {
+    console.error('[Firebase] getRedirectResult 失敗:', err.code, err.message);
     if (err.code && err.code !== 'auth/no-current-user') {
-      document.getElementById('loginStatus').textContent = '登入失敗，請重試';
+      var statusEl = document.getElementById('loginStatus');
+      if (statusEl) statusEl.textContent = '登入失敗，請重試（' + err.code + '）';
     }
   });
 }
