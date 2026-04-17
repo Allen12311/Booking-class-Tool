@@ -823,33 +823,24 @@ tbody tr:hover { background: var(--sky-light); }
 <!-- CONFIRM MODAL -->
 <!-- GOOGLE CALENDAR SETTINGS MODAL -->
 <div class="overlay" id="gcalOverlay">
-  <div class="modal" style="width:460px;max-width:95vw">
+  <div class="modal" style="width:420px;max-width:95vw">
     <div class="modal-header">
-      <div><div class="modal-title">📅 Google 日曆同步</div><div class="modal-sub">Calendar Sync Settings</div></div>
+      <div><div class="modal-title">📅 Google 日曆同步</div><div class="modal-sub">Calendar Sync</div></div>
       <button class="close-btn" onclick="closeModal('gcalOverlay')">✕</button>
     </div>
     <div class="modal-body">
-      <div style="background:var(--cream);border-radius:8px;padding:14px;font-size:12px;color:var(--text-sub);line-height:1.7;margin-bottom:16px">
-        📌 指定一個 Google 帳號作為日曆同步帳號。當該帳號登入並操作預約時，系統會自動將預約新增、更新或刪除到該帳號的 Google 日曆。
+      <div id="gcalCurrentStatus" style="margin-bottom:16px;padding:12px 14px;border-radius:8px;font-size:13px"></div>
+      <div style="background:var(--cream);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--text-sub);line-height:1.7;margin-bottom:16px">
+        ℹ️ 登入時系統會自動申請 Google 日曆權限。若同步失敗或 token 過期，點下方按鈕重新授權。
       </div>
-      <div id="gcalCurrentStatus" style="margin-bottom:16px;padding:10px 14px;border-radius:8px;font-size:13px"></div>
-      <div class="form-row full">
-        <div class="form-group">
-          <label class="form-label">同步帳號 Email</label>
-          <input class="form-input" id="gcalEmailInput" placeholder="example@gmail.com" type="email">
-          <div style="font-size:11px;color:var(--text-sub);margin-top:4px">填入要同步 Google 日曆的帳號 Email，留空則關閉同步</div>
-        </div>
-      </div>
-      <div id="gcalAuthSection" style="display:none;margin-top:12px;padding:12px 14px;background:var(--sky-light);border-radius:8px">
-        <div style="font-size:12px;color:var(--sky);margin-bottom:8px">✓ 你是同步帳號，請先授權 Google 日曆存取權限：</div>
-        <button class="btn btn-sm" onclick="gcalAuthorize()" style="background:var(--sky);color:#fff;border:none;border-radius:4px;cursor:pointer;padding:7px 16px;font-family:inherit;font-size:12px">🔑 授權 Google 日曆</button>
-        <span id="gcalAuthStatus" style="font-size:11px;color:var(--text-sub);margin-left:10px"></span>
+      <div id="gcalAuthSection" style="margin-top:4px">
+        <button class="btn btn-gold btn-sm" onclick="gcalAuthorize()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">🔑 重新授權 Google 日曆</button>
+        <div id="gcalAuthStatus" style="font-size:11px;color:var(--text-sub);margin-top:8px;text-align:center"></div>
       </div>
     </div>
-    <div class="modal-footer">
+    <div class="modal-footer" style="justify-content:space-between">
       <button class="btn btn-danger btn-sm" onclick="clearGcalSettings()">關閉同步</button>
-      <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('gcalOverlay')">取消</button>
-      <button class="btn btn-gold btn-sm" onclick="saveGcalSettings()">儲存</button>
+      <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('gcalOverlay')">關閉</button>
     </div>
   </div>
 </div>
@@ -1011,6 +1002,10 @@ function onAuthStateChanged(user) {
   currentUser = user;
   if (user) {
     document.getElementById('loginOverlay').style.display = 'none';
+    // 自動把登入者設為同步帳號（若尚未設定）
+    if (!getGcalSyncEmail()) {
+      localStorage.setItem(GCAL_SYNC_KEY, user.email);
+    }
     var userInfo = document.getElementById('userInfo');
     var userName = document.getElementById('userName');
     var userAvatar = document.getElementById('userAvatar');
@@ -1308,11 +1303,35 @@ function signInWithGoogle() {
 
   var provider = new firebase.auth.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
+  // 若用戶未曾拒絕，才在登入時一併申請 Calendar 權限
+  if (localStorage.getItem(GCAL_DENIED_KEY) !== '1') {
+    provider.addScope('https://www.googleapis.com/auth/calendar.events');
+  }
 
   auth.signInWithPopup(provider)
-    .then(function() {
+    .then(function(result) {
       signInRetryCount = 0;
       if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
+      // 登入成功後：自動把登入者設為同步帳號，並儲存 token
+      if (result && result.user) {
+        // 自動設定同步帳號為登入者
+        localStorage.setItem(GCAL_SYNC_KEY, result.user.email);
+        console.log('[GCal] 同步帳號自動設為:', result.user.email);
+      }
+      if (result && result.credential && result.credential.accessToken) {
+        gcalAccessToken = result.credential.accessToken;
+        gcalTokenExpiry = Date.now() + 55 * 60 * 1000;
+        sessionStorage.setItem('sb_gcal_token', gcalAccessToken);
+        sessionStorage.setItem('sb_gcal_expiry', gcalTokenExpiry.toString());
+        // 成功取得 token，清除拒絕記錄
+        localStorage.removeItem(GCAL_DENIED_KEY);
+        console.log('[GCal] 登入時取得 Calendar token，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
+      } else if (localStorage.getItem(GCAL_DENIED_KEY) !== '1') {
+        // 有申請 scope 但沒拿到 token，代表用戶拒絕了
+        localStorage.setItem(GCAL_DENIED_KEY, '1');
+        localStorage.removeItem(GCAL_SYNC_KEY);
+        console.log('[GCal] 用戶拒絕 Calendar 授權，記錄並不再詢問');
+      }
     })
     .catch(function(err) {
       if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
@@ -1877,9 +1896,10 @@ function autoCalcDuration() {
 var GCAL_CLIENT_ID = '1005174937199-vosakk8jd225cclq5jhkpj8vijqqm478.apps.googleusercontent.com';
 var GCAL_SCOPE     = 'https://www.googleapis.com/auth/calendar.events';
 var GCAL_SYNC_KEY  = 'sb_gcal_sync_email';
+var GCAL_DENIED_KEY = 'sb_gcal_denied'; // 用戶曾拒絕授權
 var gcalTokenClient = null;
-var gcalAccessToken = null;
-var gcalTokenExpiry = 0;
+var gcalAccessToken = sessionStorage.getItem('sb_gcal_token') || null;
+var gcalTokenExpiry = parseInt(sessionStorage.getItem('sb_gcal_expiry') || '0', 10);
 var gcalPendingAction = null;
 
 function getGcalSyncEmail() {
@@ -1908,6 +1928,9 @@ function initGcalClient() {
       }
       gcalAccessToken = resp.access_token;
       gcalTokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
+      // 存到 sessionStorage，同分頁重整後仍可用
+      sessionStorage.setItem('sb_gcal_token', gcalAccessToken);
+      sessionStorage.setItem('sb_gcal_expiry', gcalTokenExpiry.toString());
       console.log('[GCal] token 取得成功，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
       if (gcalPendingAction) { var a = gcalPendingAction; gcalPendingAction = null; a(); }
     }
@@ -1920,6 +1943,10 @@ function ensureGcalToken(callback) {
     callback();
     return;
   }
+  // token 過期，清除 sessionStorage
+  gcalAccessToken = null;
+  sessionStorage.removeItem('sb_gcal_token');
+  sessionStorage.removeItem('sb_gcal_expiry');
   console.log('[GCal] token 不存在或已過期，重新取得');
   if (!gcalTokenClient) { initGcalClient(); }
   if (!gcalTokenClient) { toast('Google Calendar SDK 尚未載入，請重新整理', '⚠️'); return; }
@@ -2012,52 +2039,38 @@ function gcalDeleteEvent(booking) {
 }
 
 function openGcalSettings() {
-  var syncEmail = getGcalSyncEmail();
-  var emailInput = document.getElementById('gcalEmailInput');
   var statusDiv  = document.getElementById('gcalCurrentStatus');
-  var authSection = document.getElementById('gcalAuthSection');
-  var authStatus  = document.getElementById('gcalAuthStatus');
-  if (emailInput) emailInput.value = syncEmail;
-  // 顯示目前狀態
-  if (syncEmail) {
+  var authStatus = document.getElementById('gcalAuthStatus');
+  var syncEmail  = getGcalSyncEmail();
+  var tokenOk    = gcalAccessToken && Date.now() < gcalTokenExpiry;
+  var denied     = localStorage.getItem(GCAL_DENIED_KEY) === '1';
+
+  if (denied) {
+    statusDiv.style.background = '#fde8e8';
+    statusDiv.style.color = 'var(--rust)';
+    statusDiv.innerHTML = '❌ 已拒絕 Google 日曆授權<br><span style="font-size:11px">點下方「重新授權」即可重新啟用同步</span>';
+  } else if (syncEmail && tokenOk) {
     statusDiv.style.background = '#e6f4ec';
     statusDiv.style.color = '#2d7a4a';
-    statusDiv.textContent = '✓ 目前同步帳號：' + syncEmail;
+    statusDiv.innerHTML = '✅ 同步帳號：<strong>' + syncEmail + '</strong><br><span style="font-size:11px">Google 日曆已授權，新增預約會自動同步</span>';
+  } else if (syncEmail) {
+    statusDiv.style.background = '#fef3e2';
+    statusDiv.style.color = '#8b5e1a';
+    statusDiv.innerHTML = '⚠️ 同步帳號：<strong>' + syncEmail + '</strong><br><span style="font-size:11px">Token 已過期，請點下方重新授權</span>';
   } else {
     statusDiv.style.background = 'var(--cream)';
     statusDiv.style.color = 'var(--text-sub)';
-    statusDiv.textContent = '目前未設定同步帳號';
+    statusDiv.textContent = '尚未授權，請點下方按鈕開始設定';
   }
-  // 若當前登入者是同步帳號，顯示授權區塊
-  if (isGcalSyncAccount()) {
-    authSection.style.display = 'block';
-    authStatus.textContent = gcalAccessToken && Date.now() < gcalTokenExpiry ? '✓ 已授權' : '尚未授權';
-  } else {
-    authSection.style.display = 'none';
-  }
+  if (authStatus) authStatus.textContent = '';
   openModal('gcalOverlay');
-}
-
-function saveGcalSettings() {
-  var email = document.getElementById('gcalEmailInput').value.trim().toLowerCase();
-  localStorage.setItem(GCAL_SYNC_KEY, email);
-  closeModal('gcalOverlay');
-  if (email) {
-    toast('同步帳號已設定：' + email, '📅');
-    // 若當前登入者就是同步帳號，立即提示授權
-    if (currentUser && currentUser.email === email) {
-      setTimeout(function() {
-        toast('請重新開啟「Google 日曆同步」頁面並點擊授權', 'ℹ️');
-      }, 1500);
-    }
-  } else {
-    toast('Google 日曆同步已關閉', '📅');
-  }
 }
 
 function clearGcalSettings() {
   localStorage.removeItem(GCAL_SYNC_KEY);
   gcalAccessToken = null;
+  sessionStorage.removeItem('sb_gcal_token');
+  sessionStorage.removeItem('sb_gcal_expiry');
   closeModal('gcalOverlay');
   toast('Google 日曆同步已關閉', '📅');
 }
@@ -2070,10 +2083,16 @@ function gcalAuthorize() {
       return;
     }
   }
+  // 用戶主動授權，清除拒絕記錄
+  localStorage.removeItem(GCAL_DENIED_KEY);
   gcalPendingAction = function() {
     var authStatus = document.getElementById('gcalAuthStatus');
     if (authStatus) authStatus.textContent = '✓ 授權成功！';
-    toast('Google 日曆授權成功，預約將自動同步 📅', '✅');
+    // 成功後自動設定同步帳號
+    if (currentUser) localStorage.setItem(GCAL_SYNC_KEY, currentUser.email);
+    toast('Google 日曆授權成功，新增預約將自動同步 📅', '✅');
+    // 更新設定頁狀態
+    openGcalSettings();
   };
   gcalTokenClient.requestAccessToken({ prompt: 'consent' });
 }
