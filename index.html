@@ -1012,11 +1012,18 @@ function onAuthStateChanged(user) {
     var storedToken  = localStorage.getItem('sb_gcal_token_' + user.uid);
     var storedExpiry = parseInt(localStorage.getItem('sb_gcal_expiry_' + user.uid) || '0', 10);
 
-    // 遷移 anon key 到 uid key（signInWithPopup.then() 時 currentUser 還是 null 導致用 anon）
+    console.group('[GCal] onAuthStateChanged token 載入');
+    console.log('uid:', user.uid);
+    console.log('storedToken:', storedToken ? '有值（前10碼: ' + storedToken.slice(0,10) + '…）' : 'null');
+    console.log('storedExpiry:', storedExpiry ? new Date(storedExpiry).toLocaleString() : '0');
+    console.log('是否過期:', storedExpiry ? (Date.now() > storedExpiry ? '❌ 已過期' : '✅ 未過期') : '無記錄');
+
+    // 遷移 anon key 到 uid key
     var anonDenied = localStorage.getItem(GCAL_DENIED_KEY + '_anon');
     if (anonDenied) {
       localStorage.setItem(GCAL_DENIED_KEY + '_' + user.uid, anonDenied);
       localStorage.removeItem(GCAL_DENIED_KEY + '_anon');
+      console.log('anon denied key 遷移完成');
     }
     var anonToken = localStorage.getItem('sb_gcal_token_anon');
     if (anonToken && !storedToken) {
@@ -1027,21 +1034,30 @@ function onAuthStateChanged(user) {
       localStorage.removeItem('sb_gcal_expiry_anon');
       storedToken  = anonToken;
       storedExpiry = parseInt(anonExpiry || '0', 10);
-      console.log('[GCal] anon token 遷移到 uid key');
+      console.log('✅ anon token 遷移到 uid key');
     }
 
     if (storedToken && Date.now() < storedExpiry) {
       gcalAccessToken = storedToken;
       gcalTokenExpiry = storedExpiry;
-      console.log('[GCal] 從 localStorage 載入有效 token');
+      console.log('✅ 從 localStorage 載入有效 token，剩餘', Math.round((storedExpiry - Date.now())/60000), '分鐘');
     } else {
       gcalAccessToken = null;
       gcalTokenExpiry = 0;
-      // token 過期或不存在，靜默取得新 token（不彈窗）
-      if (gcalGet(GCAL_SYNC_KEY) && gcalGet(GCAL_DISABLED_KEY) !== '1' && gcalGet(GCAL_DENIED_KEY) !== '1') {
+      var syncEmail   = gcalGet(GCAL_SYNC_KEY);
+      var isDisabled  = gcalGet(GCAL_DISABLED_KEY) === '1';
+      var isDenied    = gcalGet(GCAL_DENIED_KEY) === '1';
+      console.log('token 無效，檢查是否靜默續期：');
+      console.log('  syncEmail:', syncEmail || '（未設定）');
+      console.log('  disabled:', isDisabled, '| denied:', isDenied);
+      if (syncEmail && !isDisabled && !isDenied) {
+        console.log('→ ✅ 啟動 gcalSilentRefresh');
         gcalSilentRefresh();
+      } else {
+        console.log('→ ❌ 不自動續期（未設定同步帳號或已關閉/拒絕）');
       }
     }
+    console.groupEnd();
     // 自動把登入者設為同步帳號（若尚未設定，且用戶未主動關閉同步）
     if (!getGcalSyncEmail() && gcalGet(GCAL_DISABLED_KEY) !== '1') {
       gcalSet(GCAL_SYNC_KEY, user.email);
@@ -1966,20 +1982,24 @@ function autoCalcDuration() {
 function gcalSilentRefresh(retryCount) {
   retryCount = retryCount || 0;
   if (retryCount > 10) {
-    console.warn('[GCal] 靜默 refresh 失敗：GIS SDK 載入超時');
+    console.warn('[GCal] ❌ 靜默 refresh 失敗：GIS SDK 載入超時（已重試 10 次）');
     return;
   }
   if (!window.google || !window.google.accounts) {
-    // SDK 未載入，500ms 後重試
+    console.log('[GCal] gcalSilentRefresh：SDK 未載入，' + (retryCount+1) + '/10 次重試，500ms 後再試');
     setTimeout(function() { gcalSilentRefresh(retryCount + 1); }, 500);
     return;
   }
-  if (!gcalTokenClient) initGcalClient();
   if (!gcalTokenClient) {
+    console.log('[GCal] gcalSilentRefresh：初始化 gcalTokenClient');
+    initGcalClient();
+  }
+  if (!gcalTokenClient) {
+    console.warn('[GCal] gcalSilentRefresh：initGcalClient 失敗，重試');
     setTimeout(function() { gcalSilentRefresh(retryCount + 1); }, 500);
     return;
   }
-  console.log('[GCal] 靜默取得新 token（retry ' + retryCount + '）');
+  console.log('[GCal] gcalSilentRefresh：送出 requestAccessToken prompt=\'\'（retry ' + retryCount + '）');
   gcalTokenClient.requestAccessToken({ prompt: '' });
 }
 
@@ -2032,18 +2052,19 @@ function initGcalClient() {
     scope: GCAL_SCOPE,
     callback: function(resp) {
       if (resp.error) {
-        console.error('[GCal] token 失敗:', resp.error);
+        console.error('[GCal] ❌ token callback 失敗:', resp.error);
         toast('Google Calendar 授權失敗：' + resp.error, '⚠️');
         gcalPendingAction = null;
         return;
       }
       gcalAccessToken = resp.access_token;
       gcalTokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
-      // 存到 sessionStorage，同分頁重整後仍可用
-      localStorage.setItem('sb_gcal_token_' + (currentUser ? currentUser.uid : 'anon'), gcalAccessToken);
+      localStorage.setItem('sb_gcal_token_'  + (currentUser ? currentUser.uid : 'anon'), gcalAccessToken);
       localStorage.setItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'), gcalTokenExpiry.toString());
       if (gcalTokenTimeout) { clearTimeout(gcalTokenTimeout); gcalTokenTimeout = null; }
-      console.log('[GCal] token 取得成功，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
+      console.log('[GCal] ✅ token 取得成功');
+      console.log('  有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
+      console.log('  存入 key: sb_gcal_token_' + (currentUser ? currentUser.uid : 'anon'));
       updateGcalWidget();
       if (gcalPendingAction) { var a = gcalPendingAction; gcalPendingAction = null; a(); }
     }
@@ -2055,29 +2076,32 @@ var gcalTokenTimeout = null;
 
 function ensureGcalToken(callback) {
   if (gcalAccessToken && Date.now() < gcalTokenExpiry) {
+    console.log('[GCal] ensureGcalToken: token 有效，直接執行（剩餘', Math.round((gcalTokenExpiry - Date.now())/60000), '分鐘）');
     callback();
     return;
   }
+  console.log('[GCal] ensureGcalToken: token 過期或不存在，清除並重新取得');
+  console.log('  gcalAccessToken:', gcalAccessToken ? '有值' : 'null');
+  console.log('  gcalTokenExpiry:', gcalTokenExpiry ? new Date(gcalTokenExpiry).toLocaleTimeString() : '0');
   gcalAccessToken = null;
   gcalTokenExpiry = 0;
   localStorage.removeItem('sb_gcal_token_'  + (currentUser ? currentUser.uid : 'anon'));
   localStorage.removeItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'));
   updateGcalWidget();
-  console.log('[GCal] token 過期，重新取得');
-  if (!gcalTokenClient) initGcalClient();
+  if (!gcalTokenClient) { console.log('[GCal] ensureGcalToken: 初始化 gcalTokenClient'); initGcalClient(); }
   if (!gcalTokenClient) { toast('Google Calendar SDK 尚未載入，請重新整理', '⚠️'); return; }
   gcalPendingAction = callback;
-  // 10 秒 timeout，在 initGcalClient 的 callback 裡清除（GIS 不支援 requestAccessToken 的 callback 參數）
   if (gcalTokenTimeout) clearTimeout(gcalTokenTimeout);
   gcalTokenTimeout = setTimeout(function() {
     if (gcalPendingAction === callback) {
       gcalPendingAction = null;
       gcalTokenTimeout = null;
-      console.warn('[GCal] 靜默取得 token 逾時');
+      console.warn('[GCal] ❌ ensureGcalToken: 靜默取得 token 逾時（10秒）');
       toast('Google 日曆 token 已過期，請前往「📅 日曆同步」重新授權', '⚠️');
     }
   }, 10000);
-  gcalTokenClient.requestAccessToken({ prompt: '' }); // GIS 只支援 prompt，不支援 callback 參數
+  console.log('[GCal] ensureGcalToken: 送出靜默 requestAccessToken');
+  gcalTokenClient.requestAccessToken({ prompt: '' });
 }
 function bookingToCalEvent(b) {
   var t = teachers.find(function(x){ return x.id === b.teacherId; });
@@ -2095,49 +2119,66 @@ function bookingToCalEvent(b) {
 
   var endTime = b.endTime || b.time;
 
-  // 跨午夜處理：結束時間 <= 開始時間，代表跨過午夜
-  var startH = parseInt(b.time.split(':')[0],   10);
-  var startM = parseInt(b.time.split(':')[1],   10);
-  var endH   = parseInt(endTime.split(':')[0],  10);
-  var endM   = parseInt(endTime.split(':')[1],  10);
+  var startH = parseInt(b.time.split(':')[0],  10);
+  var startM = parseInt(b.time.split(':')[1],  10);
+  var endH   = parseInt(endTime.split(':')[0], 10);
+  var endM   = parseInt(endTime.split(':')[1], 10);
   var startMin = startH * 60 + startM;
   var endMin   = endH   * 60 + endM;
 
   var endDate = b.date;
-  if (endMin <= startMin) {
-    // 跨午夜：endDate 加一天（純字串運算，不依賴 JS Date 時區）
+  var crossMidnight = endMin <= startMin;
+  if (crossMidnight) {
     var parts = b.date.split('-');
-    var y = parseInt(parts[0], 10);
+    var y  = parseInt(parts[0], 10);
     var mo = parseInt(parts[1], 10);
     var d  = parseInt(parts[2], 10) + 1;
-    var daysInMonth = new Date(y, mo, 0).getDate(); // 當月天數
+    var daysInMonth = new Date(y, mo, 0).getDate();
     if (d > daysInMonth) { d = 1; mo++; }
     if (mo > 12) { mo = 1; y++; }
     endDate = y + '-' + String(mo).padStart(2,'0') + '-' + String(d).padStart(2,'0');
   }
 
-  // 重要：只使用 timeZone，不加 UTC offset (+08:00)
-  // Google Calendar API 官方建議：dateTime 不帶 offset 時，以 timeZone 欄位解讀
-  // 若同時帶 offset 和 timeZone，有些情況 API 會用 offset 轉 UTC 後再用 timeZone 換算，造成誤差
+  var startDT = b.date  + 'T' + b.time    + ':00';
+  var endDT   = endDate + 'T' + endTime   + ':00';
+
+  // ── 診斷 log ──
+  console.group('[GCal] bookingToCalEvent 診斷');
+  console.log('輸入 → date:', b.date, '| time:', b.time, '| endTime:', endTime);
+  console.log('計算 → startMin:', startMin, '| endMin:', endMin, '| 跨午夜:', crossMidnight);
+  console.log('輸出 → startDT:', startDT, '| endDT:', endDT, '| endDate:', endDate);
+  console.log('timeZone: Asia/Taipei（無 UTC offset）');
+  console.groupEnd();
+
   return {
     summary: '📚 ' + b.course + '｜' + b.name + '（' + tn + '）',
     description: desc,
-    start: { dateTime: b.date  + 'T' + b.time    + ':00', timeZone: 'Asia/Taipei' },
-    end:   { dateTime: endDate + 'T' + endTime   + ':00', timeZone: 'Asia/Taipei' },
+    start: { dateTime: startDT, timeZone: 'Asia/Taipei' },
+    end:   { dateTime: endDT,   timeZone: 'Asia/Taipei' },
     colorId: '5',
     extendedProperties: { private: { bookingId: b.id } }
   };
 }
 function gcalCreateEvent(booking) {
-  console.log('[GCal] gcalCreateEvent 呼叫，booking:', booking.id, booking.course);
+  console.group('[GCal] gcalCreateEvent');
+  console.log('booking:', booking.id, '|', booking.course, '|', booking.date, booking.time, '~', booking.endTime);
   if (!isGcalSyncAccount()) {
-    console.log('[GCal] 非同步帳號，跳過');
+    console.log('❌ 非同步帳號，跳過');
+    console.log('syncEmail:', getGcalSyncEmail(), '| currentUser:', currentUser ? currentUser.email : 'null');
+    console.groupEnd();
     return;
   }
+  console.log('✅ 是同步帳號，繼續');
+  console.groupEnd();
   ensureGcalToken(async function() {
     try {
       var eventData = bookingToCalEvent(booking);
-      console.log('[GCal] 準備建立事件:', eventData.summary, eventData.start);
+      console.group('[GCal] 送出 API 請求');
+      console.log('POST /calendars/primary/events');
+      console.log('start:', JSON.stringify(eventData.start));
+      console.log('end:  ', JSON.stringify(eventData.end));
+      console.log('完整 payload:', JSON.stringify(eventData, null, 2));
+      console.groupEnd();
       var resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + gcalAccessToken, 'Content-Type': 'application/json' },
@@ -2145,10 +2186,13 @@ function gcalCreateEvent(booking) {
       });
       var data = await resp.json();
       if (!resp.ok) {
-        console.error('[GCal] API 錯誤:', resp.status, data);
+        console.error('[GCal] API 錯誤 HTTP', resp.status, ':', JSON.stringify(data.error));
         throw new Error('HTTP ' + resp.status + ' ' + JSON.stringify(data.error));
       }
-      console.log('[GCal] 建立成功，eventId:', data.id);
+      console.log('[GCal] ✅ 建立成功');
+      console.log('  eventId:', data.id);
+      console.log('  API 回應 start:', JSON.stringify(data.start));
+      console.log('  API 回應 end:  ', JSON.stringify(data.end));
       if (data.id) {
         db.collection((cachedBasePath || getUserPath()) + '/bookings').doc(booking.id)
           .update({ gcalEventId: data.id }).catch(function(){});
@@ -2159,7 +2203,7 @@ function gcalCreateEvent(booking) {
       updateGcalWidget();
       toast('已同步至 Google 日曆 📅', '✅');
     } catch(e) {
-      console.error('[GCal] 建立失敗:', e);
+      console.error('[GCal] ❌ 建立失敗:', e);
       toast('Google 日曆同步失敗：' + e.message, '⚠️');
     }
   });
