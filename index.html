@@ -945,7 +945,6 @@ function getFirebaseConfig() {
       BUILT_IN_FIREBASE_CONFIG.apiKey &&
       BUILT_IN_FIREBASE_CONFIG.authDomain &&
       BUILT_IN_FIREBASE_CONFIG.projectId) {
-    console.log('[Firebase] 使用內建設定');
     return {
       apiKey:         BUILT_IN_FIREBASE_CONFIG.apiKey,
       authDomain:     BUILT_IN_FIREBASE_CONFIG.authDomain,
@@ -956,55 +955,44 @@ function getFirebaseConfig() {
   // 備用：從 localStorage 讀取（舊裝置或手動設定的情況）
   try {
     var stored = JSON.parse(localStorage.getItem(FIREBASE_CONFIG_KEY) || 'null');
-    console.log('[Firebase] localStorage 設定:', stored ? '有' : '無');
     return stored;
   } catch(e) { return null; }
 }
 
 async function initFirebase(config) {
   firebaseInitializing = true;
-  console.log('[Firebase] initFirebase 開始');
   try {
     if (typeof firebase === 'undefined') {
       console.error('[Firebase] SDK 未載入');
       throw new Error('Firebase SDK 尚未載入，請重新整理頁面');
     }
-    console.log('[Firebase] SDK 已載入，apps 數量:', firebase.apps.length);
     if (firebase.apps.length) {
       try {
-        console.log('[Firebase] 刪除舊 app...');
         await Promise.all(firebase.apps.map(function(app) { return app.delete(); }));
-        console.log('[Firebase] 舊 app 刪除完成');
       } catch(delErr) {
         console.warn('[Firebase] app.delete() 失敗，跳過:', delErr.message);
       }
     }
-    console.log('[Firebase] initializeApp...');
     firebase.initializeApp(config);
     db = firebase.firestore();
     auth = firebase.auth();
-    console.log('[Firebase] auth 物件建立完成:', !!auth);
     auth.onAuthStateChanged(function(user) {
-      console.log('[Firebase] onAuthStateChanged:', user ? ('已登入 ' + user.email) : '未登入(null)');
       onAuthStateChanged(user);
     });
     checkRedirectResult();
     auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(e) {
       console.warn('[Firebase] setPersistence 失敗:', e.message);
     });
-    console.log('[Firebase] initFirebase 成功');
     return true;
   } catch(e) {
     console.error('[Firebase] initFirebase 失敗:', e.message);
     return false;
   } finally {
     firebaseInitializing = false;
-    console.log('[Firebase] firebaseInitializing = false');
   }
 }
 
 function onAuthStateChanged(user) {
-  console.log('[Auth] onAuthStateChanged:', user ? ('已登入 ' + user.email) : 'null（未登入）');
   currentUser = user;
   if (user) {
     document.getElementById('loginOverlay').style.display = 'none';
@@ -1023,7 +1011,6 @@ function onAuthStateChanged(user) {
     if (anonDenied) {
       localStorage.setItem(GCAL_DENIED_KEY + '_' + user.uid, anonDenied);
       localStorage.removeItem(GCAL_DENIED_KEY + '_anon');
-      console.log('anon denied key 遷移完成');
     }
     var anonToken = localStorage.getItem('sb_gcal_token_anon');
     if (anonToken && !storedToken) {
@@ -1047,9 +1034,6 @@ function onAuthStateChanged(user) {
       var syncEmail   = gcalGet(GCAL_SYNC_KEY);
       var isDisabled  = gcalGet(GCAL_DISABLED_KEY) === '1';
       var isDenied    = gcalGet(GCAL_DENIED_KEY) === '1';
-      console.log('token 無效，檢查是否靜默續期：');
-      console.log('  syncEmail:', syncEmail || '（未設定）');
-      console.log('  disabled:', isDisabled, '| denied:', isDenied);
       if (syncEmail && !isDisabled && !isDenied) {
         console.log('→ ✅ 啟動 gcalSilentRefresh');
         gcalSilentRefresh();
@@ -1464,13 +1448,11 @@ function checkRedirectResult() {
   if (!auth) return;
   auth.getRedirectResult().then(function(result) {
     if (result && result.user) {
-      console.log('[Firebase] getRedirectResult 成功:', result.user.email);
       // getRedirectResult 成功後 onAuthStateChanged 會自動觸發
       // 但為保險起見，直接隱藏登入頁
       var loginOverlay = document.getElementById('loginOverlay');
       if (loginOverlay) loginOverlay.style.display = 'none';
     } else {
-      console.log('[Firebase] getRedirectResult: 無 redirect 登入');
     }
   }).catch(function(err) {
     console.error('[Firebase] getRedirectResult 失敗:', err.code, err.message);
@@ -1484,7 +1466,6 @@ function checkRedirectResult() {
 var firebaseInitializing = false; // 追蹤 initFirebase 是否正在執行中
 
 function handleAuth() {
-  console.log('[Auth] handleAuth 呼叫，狀態：currentUser=' + (currentUser ? currentUser.email : 'null') + ', auth=' + !!auth + ', firebaseInitializing=' + firebaseInitializing);
   if (currentUser) {
     showConfirm('登出', '確定要登出嗎？', function() {
       auth.signOut();
@@ -1493,23 +1474,19 @@ function handleAuth() {
     return;
   }
   if (firebaseInitializing) {
-    console.log('[Auth] Firebase 還在初始化，等待 800ms 後重試');
     var statusEl = document.getElementById('loginStatus');
     if (statusEl) statusEl.textContent = 'Firebase 連線中，請稍候…';
     setTimeout(handleAuth, 800);
     return;
   }
   if (!auth) {
-    console.log('[Auth] auth 為 null，開啟 Firebase 設定');
     openFirebaseConfig();
     return;
   }
-  console.log('[Auth] 呼叫 signInWithGoogle');
   signInWithGoogle();
 }
 
 function openFirebaseConfig() {
-  console.log('[Firebase] openFirebaseConfig 被呼叫，auth=' + !!auth + ', firebaseInitializing=' + firebaseInitializing);
   var cfg = getFirebaseConfig();
   if (cfg) {
     document.getElementById('fbApiKey').value = cfg.apiKey || '';
@@ -1991,7 +1968,6 @@ function gcalSilentRefresh(retryCount) {
     return;
   }
   if (!gcalTokenClient) {
-    console.log('[GCal] gcalSilentRefresh：初始化 gcalTokenClient');
     initGcalClient();
   }
   if (!gcalTokenClient) {
@@ -1999,7 +1975,6 @@ function gcalSilentRefresh(retryCount) {
     setTimeout(function() { gcalSilentRefresh(retryCount + 1); }, 500);
     return;
   }
-  console.log('[GCal] gcalSilentRefresh：送出 requestAccessToken prompt=\'\'（retry ' + retryCount + '）');
   gcalTokenClient.requestAccessToken({ prompt: '' });
 }
 
@@ -2063,26 +2038,20 @@ function initGcalClient() {
       localStorage.setItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'), gcalTokenExpiry.toString());
       if (gcalTokenTimeout) { clearTimeout(gcalTokenTimeout); gcalTokenTimeout = null; }
       console.log('[GCal] ✅ token 取得成功');
-      console.log('  有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
-      console.log('  存入 key: sb_gcal_token_' + (currentUser ? currentUser.uid : 'anon'));
       updateGcalWidget();
       if (gcalPendingAction) { var a = gcalPendingAction; gcalPendingAction = null; a(); }
     }
   });
-  console.log('[GCal] initGcalClient 完成');
 }
 // timeout handle 存在外部，讓 token callback 可以清除
 var gcalTokenTimeout = null;
 
 function ensureGcalToken(callback) {
   if (gcalAccessToken && Date.now() < gcalTokenExpiry) {
-    console.log('[GCal] ensureGcalToken: token 有效，直接執行（剩餘', Math.round((gcalTokenExpiry - Date.now())/60000), '分鐘）');
     callback();
     return;
   }
   console.log('[GCal] ensureGcalToken: token 過期或不存在，清除並重新取得');
-  console.log('  gcalAccessToken:', gcalAccessToken ? '有值' : 'null');
-  console.log('  gcalTokenExpiry:', gcalTokenExpiry ? new Date(gcalTokenExpiry).toLocaleTimeString() : '0');
   gcalAccessToken = null;
   gcalTokenExpiry = 0;
   localStorage.removeItem('sb_gcal_token_'  + (currentUser ? currentUser.uid : 'anon'));
@@ -2100,7 +2069,6 @@ function ensureGcalToken(callback) {
       toast('Google 日曆 token 已過期，請前往「📅 日曆同步」重新授權', '⚠️');
     }
   }, 10000);
-  console.log('[GCal] ensureGcalToken: 送出靜默 requestAccessToken');
   gcalTokenClient.requestAccessToken({ prompt: '' });
 }
 function bookingToCalEvent(b) {
@@ -2139,15 +2107,14 @@ function bookingToCalEvent(b) {
     endDate = y + '-' + String(mo).padStart(2,'0') + '-' + String(d).padStart(2,'0');
   }
 
-  var startDT = b.date  + 'T' + b.time    + ':00';
-  var endDT   = endDate + 'T' + endTime   + ':00';
+  var startDT = b.date  + 'T' + b.time    + ':00+08:00';
+  var endDT   = endDate + 'T' + endTime   + ':00+08:00';
 
   // ── 診斷 log ──
   console.group('[GCal] bookingToCalEvent 診斷');
   console.log('輸入 → date:', b.date, '| time:', b.time, '| endTime:', endTime);
   console.log('計算 → startMin:', startMin, '| endMin:', endMin, '| 跨午夜:', crossMidnight);
   console.log('輸出 → startDT:', startDT, '| endDT:', endDT, '| endDate:', endDate);
-  console.log('timeZone: Asia/Taipei（無 UTC offset）');
   console.groupEnd();
 
   return {
@@ -2168,16 +2135,13 @@ function gcalCreateEvent(booking) {
     console.groupEnd();
     return;
   }
-  console.log('✅ 是同步帳號，繼續');
   console.groupEnd();
   ensureGcalToken(async function() {
     try {
       var eventData = bookingToCalEvent(booking);
       console.group('[GCal] 送出 API 請求');
-      console.log('POST /calendars/primary/events');
       console.log('start:', JSON.stringify(eventData.start));
       console.log('end:  ', JSON.stringify(eventData.end));
-      console.log('完整 payload:', JSON.stringify(eventData, null, 2));
       console.groupEnd();
       var resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
         method: 'POST',
@@ -3244,17 +3208,13 @@ window.addEventListener('load', async function() {
   setTimeout(function() {
     if (window.google && window.google.accounts) {
       initGcalClient();
-      console.log('[GCal] GIS client 初始化完成');
     }
   }, 2000);
-  console.log('[Firebase] window.load 觸發');
   var cfg = getFirebaseConfig();
   if (cfg) {
-    console.log('[Firebase] 設定存在，開始 initFirebase');
     var statusEl = document.getElementById('loginStatus');
     if (statusEl) statusEl.textContent = 'Firebase 連線中…';
     var ok = await initFirebase(cfg);
-    console.log('[Firebase] initFirebase 結果:', ok ? '成功' : '失敗');
     if (!ok) {
       if (statusEl) statusEl.textContent = 'Firebase 連線失敗，請重新設定';
     } else {
@@ -3263,7 +3223,6 @@ window.addEventListener('load', async function() {
       }
     }
   } else {
-    console.log('[Firebase] 無設定，顯示設定提示');
     var statusEl = document.getElementById('loginStatus');
     if (statusEl) statusEl.textContent = '請先完成 Firebase 設定，再登入 Google 帳號';
   }
