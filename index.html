@@ -2536,7 +2536,11 @@ async function saveBooking() {
       if (sh*60+sm < nowMins) return toast('上課時間（' + time + '）已過，請選擇今天晚一點的時間', '⚠️');
     }
   }
-  const obj={id:id||'b'+Date.now(),name,phone:document.getElementById('fPhone').value.trim(),teacherId:tid,status:document.getElementById('fStatus').value,mode:document.getElementById('fMode').value,assistant:document.getElementById('fAssistant').value.trim(),date,time,endTime,duration,course,syllabus:document.getElementById('fSyllabus').value.trim(),meetingUrl:document.getElementById('fMeetingUrl').value.trim(),notes:document.getElementById('fNotes').value.trim()};
+  const existingBooking = id ? bookings.find(x => x.id === id) : null;
+  const obj={id:id||'b'+Date.now(),name,phone:document.getElementById('fPhone').value.trim(),teacherId:tid,status:document.getElementById('fStatus').value,mode:document.getElementById('fMode').value,assistant:document.getElementById('fAssistant').value.trim(),date,time,endTime,duration,course,syllabus:document.getElementById('fSyllabus').value.trim(),meetingUrl:document.getElementById('fMeetingUrl').value.trim(),notes:document.getElementById('fNotes').value.trim(),
+    // 編輯時保留原有的 gcalEventId，否則 gcalUpdateEvent 會誤判為新增
+    gcalEventId: existingBooking ? (existingBooking.gcalEventId || null) : null
+  };
 
   // ── 防呆：同一老師同天時段衝突檢查 ──
   const newStart = sh*60+sm;
@@ -3217,7 +3221,7 @@ function renderCalendar() {
       if (fs && b.status!==fs) return false;
       return true;
     }).sort((a,b)=>a.time.localeCompare(b.time));
-    const evs=db.slice(0,3).map(b=>{const t=teachers.find(x=>x.id===b.teacherId);return `<div class="cal-event" style="background:${safeGet(t,'color','#999')}22;color:${safeGet(t,'color','#666')};border-left:2px solid ${safeGet(t,'color','#999')}" onclick="event.stopPropagation();openDetail('${b.id}')">${b.time} ${b.name}</div>`;}).join('');
+    const evs=db.slice(0,3).map(b=>{const t=teachers.find(x=>x.id===b.teacherId);return `<div class="cal-event" style="background:${safeGet(t,'color','#999')}22;color:${safeGet(t,'color','#666')};border-left:2px solid ${safeGet(t,'color','#999')}" onclick="event.stopPropagation();openDetail('${b.id}')">${b.time} ${t ? t.name+' ' : ''}${b.course}</div>`;}).join('');
     const more=db.length>3?`<div style="font-size:9px;color:var(--text-sub);padding:1px 4px">+${db.length-3} 更多</div>`:'';
     cells+=`<div class="cal-cell ${isToday?'today':''}" onclick="openNewBooking('${ds}')"><div class="cal-date">${d}</div>${evs}${more}</div>`;
   }
