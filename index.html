@@ -1054,6 +1054,7 @@ function onAuthStateChanged(user) {
     }
     gcalAccessToken = null;
     gcalTokenExpiry = 0;
+    updateGcalWidget();
     stopDataListeners();
     currentGroupId = null;
     updateGroupUI();
@@ -1996,6 +1997,7 @@ function initGcalClient() {
       sessionStorage.setItem('sb_gcal_token_' + (currentUser ? currentUser.uid : 'anon'), gcalAccessToken);
       sessionStorage.setItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'), gcalTokenExpiry.toString());
       console.log('[GCal] token 取得成功，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
+      updateGcalWidget();
       if (gcalPendingAction) { var a = gcalPendingAction; gcalPendingAction = null; a(); }
     }
   });
@@ -2009,8 +2011,10 @@ function ensureGcalToken(callback) {
   }
   // token 過期，清除 sessionStorage
   gcalAccessToken = null;
+  gcalTokenExpiry = 0;
   sessionStorage.removeItem('sb_gcal_token_' + (currentUser ? currentUser.uid : 'anon'));
   sessionStorage.removeItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'));
+  updateGcalWidget(); // 立即顯示「需重新授權」
   console.log('[GCal] token 不存在或已過期，重新取得');
   if (!gcalTokenClient) { initGcalClient(); }
   if (!gcalTokenClient) { toast('Google Calendar SDK 尚未載入，請重新整理', '⚠️'); return; }
@@ -2189,10 +2193,12 @@ function openGcalSettings() {
 
 function clearGcalSettings() {
   gcalRemove(GCAL_SYNC_KEY);
-  gcalSet(GCAL_DISABLED_KEY, '1'); // 記錄用戶主動關閉
+  gcalSet(GCAL_DISABLED_KEY, '1');
   gcalAccessToken = null;
+  gcalTokenExpiry = 0;
   sessionStorage.removeItem('sb_gcal_token_' + (currentUser ? currentUser.uid : 'anon'));
   sessionStorage.removeItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'));
+  updateGcalWidget();
   closeModal('gcalOverlay');
   toast('Google 日曆同步已關閉', '📅');
 }
@@ -2211,10 +2217,9 @@ function gcalAuthorize() {
   gcalPendingAction = function() {
     var authStatus = document.getElementById('gcalAuthStatus');
     if (authStatus) authStatus.textContent = '✓ 授權成功！';
-    // 成功後自動設定同步帳號
     if (currentUser) gcalSet(GCAL_SYNC_KEY, currentUser.email);
+    updateGcalWidget();
     toast('Google 日曆授權成功，新增預約將自動同步 📅', '✅');
-    // 更新設定頁狀態
     openGcalSettings();
   };
   gcalTokenClient.requestAccessToken({ prompt: 'consent' });
