@@ -1010,6 +1010,25 @@ function onAuthStateChanged(user) {
     // 用 UID 為 key 載入此帳號的 Calendar token
     var storedToken  = localStorage.getItem('sb_gcal_token_' + user.uid);
     var storedExpiry = parseInt(localStorage.getItem('sb_gcal_expiry_' + user.uid) || '0', 10);
+
+    // 遷移 anon key 到 uid key（signInWithPopup.then() 時 currentUser 還是 null 導致用 anon）
+    var anonDenied = localStorage.getItem(GCAL_DENIED_KEY + '_anon');
+    if (anonDenied) {
+      localStorage.setItem(GCAL_DENIED_KEY + '_' + user.uid, anonDenied);
+      localStorage.removeItem(GCAL_DENIED_KEY + '_anon');
+    }
+    var anonToken = localStorage.getItem('sb_gcal_token_anon');
+    if (anonToken && !storedToken) {
+      var anonExpiry = localStorage.getItem('sb_gcal_expiry_anon');
+      localStorage.setItem('sb_gcal_token_'  + user.uid, anonToken);
+      localStorage.setItem('sb_gcal_expiry_' + user.uid, anonExpiry || '0');
+      localStorage.removeItem('sb_gcal_token_anon');
+      localStorage.removeItem('sb_gcal_expiry_anon');
+      storedToken  = anonToken;
+      storedExpiry = parseInt(anonExpiry || '0', 10);
+      console.log('[GCal] anon token 遷移到 uid key');
+    }
+
     if (storedToken && Date.now() < storedExpiry) {
       gcalAccessToken = storedToken;
       gcalTokenExpiry = storedExpiry;
@@ -1335,7 +1354,14 @@ function signInWithGoogle() {
   var provider = new firebase.auth.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
   // 若用戶未曾拒絕且未主動關閉同步，才在登入時申請 Calendar 權限
-  if (gcalGet(GCAL_DENIED_KEY) !== '1' && gcalGet(GCAL_DISABLED_KEY) !== '1') {
+  // 注意：此時 currentUser 為 null，gcalKey() 會用 'anon'，直接用 localStorage 搜尋
+  var hasAnyCal = Object.keys(localStorage).some(function(k) {
+    return k.startsWith(GCAL_DISABLED_KEY + '_') || k.startsWith(GCAL_DENIED_KEY + '_');
+  });
+  // 保守策略：沒有任何拒絕/關閉記錄就申請 scope
+  var anyDisabled = Object.keys(localStorage).some(function(k) { return k.startsWith(GCAL_DISABLED_KEY + '_') && localStorage.getItem(k) === '1'; });
+  var anyDenied   = Object.keys(localStorage).some(function(k) { return k.startsWith(GCAL_DENIED_KEY + '_')   && localStorage.getItem(k) === '1'; });
+  if (!anyDisabled && !anyDenied) {
     provider.addScope('https://www.googleapis.com/auth/calendar.events');
   }
 
@@ -1343,33 +1369,36 @@ function signInWithGoogle() {
     .then(function(result) {
       signInRetryCount = 0;
       if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
-      // 登入成功後：自動把登入者設為同步帳號，並儲存 token
-      if (result && result.user) {
-        // 只在用戶未主動關閉同步的情況下，才自動設定同步帳號
-        if (gcalGet(GCAL_DISABLED_KEY) !== '1') {
-          gcalSet(GCAL_SYNC_KEY, result.user.email);
-          console.log('[GCal] 同步帳號自動設為:', result.user.email);
-        }
+      if (!result || !result.user) return;
+
+      var uid   = result.user.uid;
+      var email = result.user.email;
+
+      // signInWithPopup.then() 時 currentUser 尚未由 onAuthStateChanged 設定
+      // 必須直接用 result.user.uid 操作 localStorage，不能透過 gcalKey()/gcalGet()
+
+      // 只在未主動關閉同步的情況下，自動設定同步帳號
+      var disabledKey = GCAL_DISABLED_KEY + '_' + uid;
+      var deniedKey   = GCAL_DENIED_KEY   + '_' + uid;
+      if (localStorage.getItem(disabledKey) !== '1') {
+        localStorage.setItem(GCAL_SYNC_KEY + '_' + uid, email);
+        console.log('[GCal] 同步帳號自動設為:', email);
       }
-      if (result && result.credential && result.credential.accessToken) {
-        // 首次授權或重新授權：直接從 credential 取得 token
+
+      if (result.credential && result.credential.accessToken) {
+        // 首次授權：直接從 credential 取得 token，用 uid 為 key 存入
         gcalAccessToken = result.credential.accessToken;
         gcalTokenExpiry = Date.now() + 55 * 60 * 1000;
-        localStorage.setItem('sb_gcal_token_' + (currentUser ? currentUser.uid : 'anon'), gcalAccessToken);
-        localStorage.setItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'), gcalTokenExpiry.toString());
-        gcalRemove(GCAL_DENIED_KEY);
+        localStorage.setItem('sb_gcal_token_'  + uid, gcalAccessToken);
+        localStorage.setItem('sb_gcal_expiry_' + uid, gcalTokenExpiry.toString());
+        localStorage.removeItem(deniedKey);
         console.log('[GCal] 登入時取得 Calendar token，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
-      } else if (gcalGet(GCAL_DENIED_KEY) !== '1') {
-        // 沒拿到 accessToken，有兩種可能：
-        // a) 用戶已授權過，Google 不再給 accessToken（正常，用靜默模式取得）
-        // b) 用戶明確拒絕（會有 error，在 catch 裡處理）
-        // 這裡先嘗試靜默取得 token
+      } else if (localStorage.getItem(deniedKey) !== '1') {
+        // 已授權過（Google 不再給 accessToken），嘗試靜默取得
         console.log('[GCal] 登入結果無 accessToken，嘗試靜默取得');
         setTimeout(function() {
           if (!gcalTokenClient) initGcalClient();
-          if (gcalTokenClient) {
-            gcalTokenClient.requestAccessToken({ prompt: '' });
-          }
+          if (gcalTokenClient) gcalTokenClient.requestAccessToken({ prompt: '' });
         }, 1500);
       }
     })
@@ -1381,10 +1410,10 @@ function signInWithGoogle() {
 
       if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
         // 用戶關閉授權視窗 = 拒絕了 Calendar 權限
-        // 記錄拒絕，但只在這次有申請 scope 的情況下（非 denied 狀態）
-        if (gcalGet(GCAL_DENIED_KEY) !== '1') {
-          gcalSet(GCAL_DENIED_KEY, '1');
-          console.log('[GCal] 用戶關閉授權視窗，記錄拒絕，不再詢問');
+        // currentUser 此時為 null，先存在 anon key，登入後 onAuthStateChanged 會遷移
+        if (!anyDenied) {
+          localStorage.setItem(GCAL_DENIED_KEY + '_anon', '1');
+          console.log('[GCal] 用戶關閉授權視窗，記錄拒絕（anon），不再詢問');
         }
         statusEl.textContent = '登入已取消，請再次點擊登入';
         return;
