@@ -301,7 +301,8 @@ tbody tr:hover { background: var(--sky-light); }
   #notifBtn { display: none !important; }
   #exportBtn { display: none !important; }
   #newBookingBtn { display: none !important; }
-  #gcalBtn { display: none !important; }
+  /* 手機版 toolbar 同步元件隱藏文字只顯示 icon */
+  #gcalSyncWidget .gcal-sync-text { display: none; }
 
   /* Hide sidebar, show drawer + mobile nav */
   .sidebar { display: none; }
@@ -390,9 +391,6 @@ tbody tr:hover { background: var(--sky-light); }
       <span>👥</span><span class="btn-label" style="font-size:11px">群組</span>
     </button>
 
-    <button class="btn btn-outline btn-sm" id="gcalBtn" onclick="openGcalSettings()" title="Google 日曆同步" style="display:flex;align-items:center;gap:5px">
-      <span>📅</span><span class="btn-label" style="font-size:11px">日曆同步</span>
-    </button>
     <button class="btn btn-outline btn-sm" id="notifBtn" onclick="toggleNotification()" title="課程提醒通知" style="display:flex;align-items:center;gap:5px">
       <span id="notifIcon">🔔</span><span id="notifLabel" class="btn-label" style="font-size:11px">通知</span>
     </button>
@@ -440,6 +438,13 @@ tbody tr:hover { background: var(--sky-light); }
           <option value="completed">已完成</option>
           <option value="cancelled">已取消</option>
         </select>
+        <!-- Google 日曆同步小元件 -->
+        <div id="gcalSyncWidget" onclick="openGcalSettings()" title="Google 日曆同步設定"
+          style="display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--cream);cursor:pointer;transition:all 0.15s;white-space:nowrap;flex-shrink:0"
+          onmouseover="this.style.borderColor='var(--gold)'" onmouseout="this.style.borderColor='var(--border)'">
+          <span id="gcalSyncIcon" style="font-size:14px">📅</span>
+          <span id="gcalSyncTime" class="gcal-sync-text" style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-sub)">未同步</span>
+        </div>
       </div>
       <div class="view-toggle">
         <button class="view-btn active" id="btnTable" onclick="switchViewBtn('table')">列表</button>
@@ -1030,6 +1035,7 @@ function onAuthStateChanged(user) {
     startIdleTimer();
     // 登入後立即檢查是否已超過閒置時間（處理重開頁面的情況）
     checkIdleTimeout();
+    updateGcalWidget();
     checkUserGroup();
   } else {
     document.getElementById('loginOverlay').style.display = 'flex';
@@ -1644,6 +1650,9 @@ function switchNav(v) {
   document.getElementById('filterStatus').value = '';
   statsStatusFilter = '';
   statsSelectedTeacher = '';
+  // 切換頁面時清除多選狀態
+  multiSelectMode = false;
+  selectedBookingIds.clear();
   // 統計頁隱藏 toolbar
   document.querySelector('.toolbar').style.display = v === 'stats' ? 'none' : '';
   // 切換頁面時，若登入了但還沒加入群組，提醒用戶
@@ -1932,6 +1941,11 @@ var GCAL_SCOPE        = 'https://www.googleapis.com/auth/calendar.events';
 var GCAL_SYNC_KEY     = 'sb_gcal_sync_email';
 var GCAL_DENIED_KEY   = 'sb_gcal_denied';
 var GCAL_DISABLED_KEY = 'sb_gcal_disabled';
+var GCAL_LAST_SYNC_KEY = 'sb_gcal_last_sync'; // 最後同步時間（per user）
+
+// 多選刪除狀態
+var multiSelectMode = false;
+var selectedBookingIds = new Set();
 
 // 取得當前帳號專屬的 key（加 UID 後綴）
 function gcalKey(base) {
@@ -2062,6 +2076,8 @@ function gcalCreateEvent(booking) {
         var idx = bookings.findIndex(function(x){ return x.id === booking.id; });
         if (idx >= 0) bookings[idx].gcalEventId = data.id;
       }
+      gcalSet(GCAL_LAST_SYNC_KEY, new Date().toISOString());
+      updateGcalWidget();
       toast('已同步至 Google 日曆 📅', '✅');
     } catch(e) {
       console.error('[GCal] 建立失敗:', e);
@@ -2080,6 +2096,8 @@ function gcalUpdateEvent(booking) {
         body: JSON.stringify(bookingToCalEvent(booking))
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      gcalSet(GCAL_LAST_SYNC_KEY, new Date().toISOString());
+      updateGcalWidget();
       toast('Google 日曆已更新 📅', '✅');
     } catch(e) { console.error('[GCal] 更新失敗:', e); toast('Google 日曆更新失敗：' + e.message, '⚠️'); }
   });
@@ -2099,6 +2117,41 @@ function gcalDeleteEvent(booking) {
   });
 }
 
+function updateGcalWidget() {
+  var icon = document.getElementById('gcalSyncIcon');
+  var timeEl = document.getElementById('gcalSyncTime');
+  if (!icon || !timeEl) return;
+
+  var disabled = gcalGet(GCAL_DISABLED_KEY) === '1';
+  var denied   = gcalGet(GCAL_DENIED_KEY) === '1';
+  var tokenOk  = gcalAccessToken && Date.now() < gcalTokenExpiry;
+  var lastSync = gcalGet(GCAL_LAST_SYNC_KEY);
+
+  if (disabled || denied || !getGcalSyncEmail()) {
+    icon.textContent = '📅';
+    timeEl.textContent = '未同步';
+    timeEl.style.color = 'var(--text-sub)';
+    document.getElementById('gcalSyncWidget').style.borderColor = 'var(--border)';
+  } else if (tokenOk) {
+    icon.textContent = '📅';
+    if (lastSync) {
+      var d = new Date(lastSync);
+      var str = (d.getMonth()+1) + '/' + d.getDate() + ' ' +
+        String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+      timeEl.textContent = str;
+    } else {
+      timeEl.textContent = '已授權';
+    }
+    timeEl.style.color = '#2d7a4a';
+    document.getElementById('gcalSyncWidget').style.borderColor = '#b8d4c0';
+  } else {
+    icon.textContent = '📅';
+    timeEl.textContent = '需重新授權';
+    timeEl.style.color = 'var(--rust)';
+    document.getElementById('gcalSyncWidget').style.borderColor = 'var(--rust)';
+  }
+}
+
 function openGcalSettings() {
   var statusDiv  = document.getElementById('gcalCurrentStatus');
   var authStatus = document.getElementById('gcalAuthStatus');
@@ -2106,6 +2159,8 @@ function openGcalSettings() {
   var tokenOk    = gcalAccessToken && Date.now() < gcalTokenExpiry;
   var denied     = gcalGet(GCAL_DENIED_KEY) === '1';
   var disabled   = gcalGet(GCAL_DISABLED_KEY) === '1';
+  var lastSync   = gcalGet(GCAL_LAST_SYNC_KEY);
+  var lastSyncStr = lastSync ? new Date(lastSync).toLocaleString('zh-TW', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '尚未同步過';
 
   if (disabled || denied) {
     statusDiv.style.background = '#fde8e8';
@@ -2114,11 +2169,15 @@ function openGcalSettings() {
   } else if (syncEmail && tokenOk) {
     statusDiv.style.background = '#e6f4ec';
     statusDiv.style.color = '#2d7a4a';
-    statusDiv.innerHTML = '✅ 同步帳號：<strong>' + syncEmail + '</strong><br><span style="font-size:11px">Google 日曆已授權，新增預約會自動同步</span>';
+    statusDiv.innerHTML = '✅ 同步帳號：<strong>' + syncEmail + '</strong>'
+      + '<br><span style="font-size:11px">Google 日曆已授權，新增預約會自動同步</span>'
+      + '<br><span style="font-size:11px;color:var(--text-sub)">最後同步：' + lastSyncStr + '</span>';
   } else if (syncEmail) {
     statusDiv.style.background = '#fef3e2';
     statusDiv.style.color = '#8b5e1a';
-    statusDiv.innerHTML = '⚠️ 同步帳號：<strong>' + syncEmail + '</strong><br><span style="font-size:11px">Token 已過期，請點下方重新授權</span>';
+    statusDiv.innerHTML = '⚠️ 同步帳號：<strong>' + syncEmail + '</strong>'
+      + '<br><span style="font-size:11px">Token 已過期，請點下方重新授權</span>'
+      + '<br><span style="font-size:11px;color:var(--text-sub)">最後同步：' + lastSyncStr + '</span>';
   } else {
     statusDiv.style.background = 'var(--cream)';
     statusDiv.style.color = 'var(--text-sub)';
@@ -2453,6 +2512,53 @@ function quickStats() {
     <div class="stat-card sage"><div class="stat-label">已完成</div><div class="stat-value">${bookings.filter(b=>b.status==='completed').length}</div><div class="stat-sub">本期結束</div></div>`;
 }
 
+function toggleMultiSelect() {
+  multiSelectMode = !multiSelectMode;
+  selectedBookingIds.clear();
+  renderAll();
+}
+
+function toggleSelectBooking(id, e) {
+  e.stopPropagation();
+  if (selectedBookingIds.has(id)) {
+    selectedBookingIds.delete(id);
+  } else {
+    selectedBookingIds.add(id);
+  }
+  renderAll();
+}
+
+function deleteSelectedBookings() {
+  if (selectedBookingIds.size === 0) return toast('請先選取要刪除的預約', '⚠️');
+  var count = selectedBookingIds.size;
+  showConfirm(
+    '批次刪除',
+    '確定要刪除選取的 <strong>' + count + '</strong> 筆預約？<br><span style="font-size:12px;color:var(--text-sub)">此操作無法復原。</span>',
+    async function() {
+      var ids = Array.from(selectedBookingIds);
+      var prevBookings = bookings.slice();
+      // 先找出要刪除的 booking 物件（gcalDeleteEvent 需要用到）
+      var toDelete = ids.map(function(id) { return bookings.find(function(b){ return b.id === id; }); }).filter(Boolean);
+      bookings = bookings.filter(function(b){ return !selectedBookingIds.has(b.id); });
+      selectedBookingIds.clear();
+      multiSelectMode = false;
+      renderTeachers();
+      renderAll();
+      toast('已刪除 ' + count + ' 筆預約', '🗑️');
+      try {
+        await Promise.all(ids.map(function(id){ return dbDeleteBooking(id); }));
+        // 同步刪除 Google 日曆事件
+        toDelete.forEach(function(b){ gcalDeleteEvent(b); });
+      } catch(e) {
+        bookings = prevBookings;
+        renderTeachers();
+        renderAll();
+        toast('刪除失敗，已回復：' + e.message, '⚠️');
+      }
+    }
+  );
+}
+
 function renderTable() {
   const list=getFiltered().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
   const sm={confirmed:'已確認',pending:'待確認',completed:'已完成',cancelled:'已取消'};
@@ -2468,31 +2574,42 @@ function renderTable() {
       : b.mode==='線上+實體'
       ? `<span style="font-size:10px;background:#f0e8f5;color:#6b3d8c;padding:1px 6px;border-radius:3px;margin-left:4px">🏫💻混合</span>`
       : `<span style="font-size:10px;background:#f0ede8;color:var(--text-sub);padding:1px 6px;border-radius:3px;margin-left:4px">🏫實體</span>`;
-    return `<tr onclick="openDetail('${b.id}')" style="cursor:pointer">
+    const isSelected = selectedBookingIds.has(b.id);
+    const checkCell = multiSelectMode
+      ? `<td onclick="toggleSelectBooking('${b.id}',event)" style="cursor:pointer;width:36px">
+           <div style="width:18px;height:18px;border:2px solid ${isSelected?'var(--gold)':'var(--border)'};border-radius:4px;background:${isSelected?'var(--gold)':'transparent'};display:flex;align-items:center;justify-content:center;margin:auto">
+             ${isSelected?'<span style="color:#fff;font-size:11px;line-height:1">✓</span>':''}
+           </div>
+         </td>`
+      : '';
+    return `<tr onclick="${multiSelectMode?`toggleSelectBooking('${b.id}',event)`:`openDetail('${b.id}')`}" style="cursor:pointer;${isSelected?'background:var(--gold-pale)':''}">
+      ${checkCell}
       <td><strong>${b.name}</strong>${b.phone?`<br><span style="font-size:11px;color:var(--text-sub)">${b.phone}</span>`:''}</td>
       <td><div class="teacher-badge"><div class="teacher-badge-dot" style="background:${safeGet(t,'color','#999')}"></div>${safeGet(t,'name','—')}</div></td>
       <td>${b.course}${modeTag}${b.assistant?`<br><span style="font-size:11px;color:var(--text-sub)">助教：${b.assistant}</span>`:''}<br><span style="font-size:11px;color:var(--text-sub)">${fmtDuration(b.duration)}</span>${b.meetingUrl?`<span style="font-size:10px;color:var(--sky);margin-left:4px">🔗</span>`:''}${b.notes?`<span title="${b.notes.slice(0,40)}" style="font-size:10px;color:var(--text-sub);margin-left:4px">📝</span>`:''}</td>
       <td>${b.date}<br><span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text-sub)">${b.time}${b.endTime?' ~ '+b.endTime:''}</span></td>
       <td><span class="tag ${sc[b.status]}">${sm[b.status]}</span></td>
       <td><div class="action-btns" onclick="event.stopPropagation()">
-        <div class="icon-btn" onclick="openEditBooking('${b.id}')" title="編輯">✏️</div>
+        ${multiSelectMode?'':`<div class="icon-btn" onclick="openEditBooking('${b.id}')" title="編輯">✏️</div>`}
         <div class="icon-btn" onclick="deleteBooking('${b.id}')" title="刪除">🗑️</div>
       </div></td>
     </tr>`;
   }).join('');
 
-  // Mobile cards
+  // Mobile cards with multi-select
   const cards = list.map(b => {
     const t = teachers.find(x=>x.id===b.teacherId);
-    return `<div class="booking-card" onclick="openDetail('${b.id}')">
+    const isSelected = selectedBookingIds.has(b.id);
+    return `<div class="booking-card" onclick="${multiSelectMode?`toggleSelectBooking('${b.id}',event)`:`openDetail('${b.id}')`}" style="${isSelected?'background:var(--gold-pale);border-color:var(--gold)':''}">
       <div class="booking-card-accent" style="background:${safeGet(t,'color','#ccc')}"></div>
+      ${multiSelectMode?`<div style="position:absolute;top:12px;right:12px;width:20px;height:20px;border:2px solid ${isSelected?'var(--gold)':'var(--border)'};border-radius:4px;background:${isSelected?'var(--gold)':'#fff'};display:flex;align-items:center;justify-content:center">${isSelected?'<span style="color:#fff;font-size:12px">✓</span>':''}</div>`:''}
       <div style="padding-left:8px">
         <div class="booking-card-top">
           <div>
             <div class="booking-card-name">${b.name}${b.phone?`<span style="font-size:11px;color:var(--text-sub);font-weight:400;margin-left:6px">${b.phone}</span>`:''}</div>
             <div class="booking-card-course">${b.course}${b.assistant?' · 助教：'+b.assistant:''} · ${fmtDuration(b.duration)}</div>
           </div>
-          <span class="tag ${sc[b.status]}" style="flex-shrink:0">${sm[b.status]}</span>
+          <span class="tag ${sc[b.status]}" style="flex-shrink:0;${multiSelectMode?'margin-right:28px':''}">${sm[b.status]}</span>
         </div>
         <div class="booking-card-meta">
           <div class="booking-card-meta-item"><span>📅</span>${b.date}</div>
@@ -2506,10 +2623,24 @@ function renderTable() {
     </div>`;
   }).join('');
 
+  const multiSelectBar = multiSelectMode
+    ? `<div style="display:flex;align-items:center;gap:10px;background:var(--gold-pale);border:1px solid var(--gold);border-radius:8px;padding:10px 14px;margin-bottom:12px">
+         <span style="font-size:13px;color:var(--ink);flex:1">已選取 <strong>${selectedBookingIds.size}</strong> 筆</span>
+         <button onclick="deleteSelectedBookings()" class="btn btn-danger btn-sm" ${selectedBookingIds.size===0?'disabled style="opacity:0.5"':''}>🗑️ 刪除選取</button>
+         <button onclick="toggleMultiSelect()" class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:6px 12px;font-family:inherit">取消</button>
+       </div>`
+    : '';
+
+  const theadCheckCell = multiSelectMode ? '<th style="width:36px"></th>' : '';
+
   c.innerHTML=`<div class="stats-row">${quickStats()}</div>
-    <div class="section-header"><div class="section-title">預約清單 <span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text-sub);margin-left:8px">${list.length} 筆</span></div></div>
+    <div class="section-header">
+      <div class="section-title">預約清單 <span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text-sub);margin-left:8px">${list.length} 筆</span></div>
+      <button onclick="toggleMultiSelect()" class="btn btn-sm" style="border:1px solid var(--border);background:${multiSelectMode?'var(--ink)':'transparent'};color:${multiSelectMode?'#fff':'var(--text-sub)'};border-radius:4px;cursor:pointer;padding:5px 12px;font-family:inherit;font-size:12px">${multiSelectMode?'✕ 取消多選':'☑ 多選刪除'}</button>
+    </div>
+    ${multiSelectBar}
     <div class="table-wrap"><table>
-      <thead><tr><th>客戶</th><th>老師</th><th>課程</th><th>日期 ／ 時間</th><th>狀態</th><th>操作</th></tr></thead>
+      <thead><tr>${theadCheckCell}<th>客戶</th><th>老師</th><th>課程</th><th>日期 ／ 時間</th><th>狀態</th><th>操作</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
     <div class="booking-cards">${cards}</div>`;
