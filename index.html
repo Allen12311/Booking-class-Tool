@@ -838,24 +838,6 @@ tbody tr:hover { background: var(--sky-light); }
       <div style="background:var(--cream);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--text-sub);line-height:1.7;margin-bottom:16px">
         ℹ️ 登入時系統會自動申請 Google 日曆權限。若同步失敗或 token 過期，點下方按鈕重新授權。
       </div>
-
-      <!-- 格式設定 -->
-      <div style="margin-bottom:16px">
-        <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:10px">事件標題格式</div>
-        <input class="form-input" id="gcalTitleFormat" placeholder="📚 {course}｜{name}（{teacher}）"
-          style="font-family:'DM Mono',monospace;font-size:12px;margin-bottom:6px"
-          oninput="updateGcalFormatPreview()">
-        <div style="font-size:10px;color:var(--text-sub);line-height:1.8">
-          可用變數：
-          <code style="background:var(--cream);padding:1px 4px;border-radius:3px">{course}</code> 課程名稱　
-          <code style="background:var(--cream);padding:1px 4px;border-radius:3px">{name}</code> 學生姓名　
-          <code style="background:var(--cream);padding:1px 4px;border-radius:3px">{teacher}</code> 老師名稱　
-          <code style="background:var(--cream);padding:1px 4px;border-radius:3px">{time}</code> 上課時間　
-          <code style="background:var(--cream);padding:1px 4px;border-radius:3px">{mode}</code> 上課方式
-        </div>
-        <div id="gcalFormatPreview" style="margin-top:8px;padding:6px 10px;background:#f0ede8;border-radius:6px;font-size:12px;color:var(--ink);font-family:'DM Mono',monospace;word-break:break-all"></div>
-      </div>
-
       <div id="gcalAuthSection" style="margin-top:4px;display:flex;flex-direction:column;gap:8px">
         <button class="btn btn-gold btn-sm" onclick="gcalAuthorize()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">🔑 重新授權 Google 日曆</button>
         <button class="btn btn-sm" onclick="gcalPullFromCalendar()" id="gcalPullBtn" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:7px;font-family:inherit">🔄 從 Google 日曆同步</button>
@@ -864,10 +846,7 @@ tbody tr:hover { background: var(--sky-light); }
     </div>
     <div class="modal-footer" style="justify-content:space-between">
       <button class="btn btn-danger btn-sm" onclick="clearGcalSettings()">關閉同步</button>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('gcalOverlay')">關閉</button>
-        <button class="btn btn-gold btn-sm" onclick="saveGcalFormat()">儲存格式</button>
-      </div>
+      <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('gcalOverlay')">關閉</button>
     </div>
   </div>
 </div>
@@ -933,6 +912,12 @@ var BUILT_IN_FIREBASE_CONFIG = {
   projectId:  ''
 };
 // ▲▲▲ 三個欄位都填好後，清除快取也不需要重新連線 ▲▲▲
+
+// ── GCal 常數需要提前宣告，因為 signInWithGoogle 在 GCal 函式區之前就會使用 ──
+var GCAL_ENABLED_KEY   = 'sb_gcal_enabled';
+var GCAL_DISABLED_KEY  = 'sb_gcal_disabled';
+var GCAL_DENIED_KEY    = 'sb_gcal_denied';
+var GCAL_SYNC_KEY      = 'sb_gcal_sync_email';
 
 var FIREBASE_CONFIG_KEY = 'sb_firebase_config';
 var LOGO_STORAGE_KEY = 'sb_logo';
@@ -2099,70 +2084,16 @@ function gcalSilentRefresh(retryCount) {
   gcalTokenClient.requestAccessToken({ prompt: '' });
 }
 
-var GCAL_TITLE_FORMAT_KEY = 'sb_gcal_title_fmt';
-var GCAL_FORMAT_VERSION_KEY = 'sb_gcal_fmt_ver';
-var GCAL_FORMAT_VERSION = '2'; // 版本升級時自動重置為新預設格式
 var GCAL_DEFAULT_TITLE_FORMAT = '📖 {time} {teacher} / {course}';
 
-function getGcalTitleFormat() {
-  // 版本不符時清除舊格式，使用新預設值
-  var storedVer = gcalGet(GCAL_FORMAT_VERSION_KEY);
-  if (storedVer !== GCAL_FORMAT_VERSION) {
-    gcalRemove(GCAL_TITLE_FORMAT_KEY);
-    gcalSet(GCAL_FORMAT_VERSION_KEY, GCAL_FORMAT_VERSION);
-  }
-  return gcalGet(GCAL_TITLE_FORMAT_KEY) || GCAL_DEFAULT_TITLE_FORMAT;
-}
 
-function applyGcalFormat(fmt, b) {
-  var t = teachers.find(function(x){ return x.id === b.teacherId; });
-  return fmt
-    .replace(/{course}/g,  b.course  || '')
-    .replace(/{name}/g,    b.name    || '')
-    .replace(/{teacher}/g, t ? t.name : '')
-    .replace(/{time}/g,    b.time + (b.endTime ? '~' + b.endTime : ''))
-    .replace(/{mode}/g,    b.mode    || '實體')
-    .replace(/{phone}/g,   b.phone   || '');
-}
 
-function updateGcalFormatPreview() {
-  var input = document.getElementById('gcalTitleFormat');
-  var preview = document.getElementById('gcalFormatPreview');
-  if (!input || !preview) return;
-  var fmt = input.value || GCAL_DEFAULT_TITLE_FORMAT;
-  // 用假資料預覽
-  var sample = {
-    course: '高中數學', name: '王小明', teacherId: '',
-    time: '10:00', endTime: '11:00', mode: '實體', phone: '0912-345-678'
-  };
-  var sampleTeacher = teachers[0];
-  if (sampleTeacher) sample.teacherId = sampleTeacher.id;
-  var result = fmt
-    .replace(/{course}/g,  sample.course)
-    .replace(/{name}/g,    sample.name)
-    .replace(/{teacher}/g, sampleTeacher ? sampleTeacher.name : '李老師')
-    .replace(/{time}/g,    sample.time + '~' + sample.endTime)
-    .replace(/{mode}/g,    sample.mode)
-    .replace(/{phone}/g,   sample.phone);
-  preview.textContent = '預覽：' + result;
-}
-
-function saveGcalFormat() {
-  var input = document.getElementById('gcalTitleFormat');
-  if (!input) return;
-  var fmt = input.value.trim() || GCAL_DEFAULT_TITLE_FORMAT;
-  gcalSet(GCAL_TITLE_FORMAT_KEY, fmt);
-  toast('日曆標題格式已儲存', '✅');
-}
 
 // ── Google Calendar 同步 ──
 var GCAL_CLIENT_ID    = '1005174937199-vosakk8jd225cclq5jhkpj8vijqqm478.apps.googleusercontent.com';
 var GCAL_SCOPE        = 'https://www.googleapis.com/auth/calendar.events';
-// GCal 設定 key 都加上 UID 後綴，讓每個帳號完全隔離
-var GCAL_SYNC_KEY      = 'sb_gcal_sync_email';
-var GCAL_DENIED_KEY    = 'sb_gcal_denied';
-var GCAL_DISABLED_KEY  = 'sb_gcal_disabled';
-var GCAL_ENABLED_KEY   = 'sb_gcal_enabled';   // 曾成功授權過（不依賴 token，永久記錄）
+// GCAL_SYNC_KEY / GCAL_DENIED_KEY / GCAL_DISABLED_KEY / GCAL_ENABLED_KEY
+// 已在 script 頂部宣告（行 917-920），避免 hoisting 問題
 var GCAL_LAST_SYNC_KEY = 'sb_gcal_last_sync';
 
 // 多選刪除狀態
@@ -2303,7 +2234,7 @@ function bookingToCalEvent(b) {
   console.groupEnd();
 
   return {
-    summary: applyGcalFormat(getGcalTitleFormat(), b),
+    summary: '📖 ' + b.time + (b.endTime ? '~' + b.endTime : '') + ' ' + tn + ' / ' + b.course,
     description: desc,
     start: { dateTime: startDT, timeZone: 'Asia/Taipei' },
     end:   { dateTime: endDT,   timeZone: 'Asia/Taipei' },
@@ -2675,12 +2606,6 @@ function openGcalSettings() {
     }
   }
   if (authStatus) authStatus.textContent = '';
-  // 載入已儲存的格式設定
-  var fmtInput = document.getElementById('gcalTitleFormat');
-  if (fmtInput) {
-    fmtInput.value = getGcalTitleFormat();
-    updateGcalFormatPreview();
-  }
   openModal('gcalOverlay');
 }
 
