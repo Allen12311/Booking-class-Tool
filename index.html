@@ -274,7 +274,9 @@ tbody tr:hover { background: var(--sky-light); }
 }
 .booking-card-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; }
 .booking-card-name { font-size: 15px; font-weight: 700; color: var(--ink); }
-.booking-card-course { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
+.booking-card-course { font-size: 12px; color: var(--text-sub); margin-top: 2px; word-break: break-all; overflow-wrap: break-word; }
+/* 桌面表格課程欄位自動換行 */
+table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: break-word; }
 .booking-card-meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
 .booking-card-meta-item { font-size: 11px; color: var(--text-sub); display: flex; align-items: center; gap: 4px; }
 
@@ -490,7 +492,7 @@ tbody tr:hover { background: var(--sky-light); }
         <div class="form-group"><label class="form-label">助教姓名 <span style="color:var(--text-sub);font-weight:400">（選填）</span></label><input class="form-input" id="fAssistant" placeholder="助教姓名"></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label class="form-label">課程名稱 *</label><input class="form-input" id="fCourse" placeholder="e.g. 英文口說 / 程式設計" maxlength="20"></div>
+        <div class="form-group"><label class="form-label">課程名稱 *</label><input class="form-input" id="fCourse" placeholder="e.g. 英文口說 / 程式設計" maxlength="70"></div>
       </div>
       <div class="form-row">
         <div class="form-group"><label class="form-label">上課日期 *</label><input class="form-input" id="fDate" type="date" onchange="onDateChange()"></div>
@@ -2234,7 +2236,7 @@ function bookingToCalEvent(b) {
   console.groupEnd();
 
   return {
-    summary: '📖 ' + b.time + (b.endTime ? '~' + b.endTime : '') + ' ' + tn + ' / ' + b.course,
+    summary: '📖 ' + b.time + (b.endTime ? '~' + b.endTime : '') + ' ' + tn + ' / ' + b.course + ' ' + (b.mode || '實體'),
     description: desc,
     start: { dateTime: startDT, timeZone: 'Asia/Taipei' },
     end:   { dateTime: endDT,   timeZone: 'Asia/Taipei' },
@@ -2709,7 +2711,7 @@ async function saveBooking() {
   const endTime=document.getElementById('fEndTime').value;
   const course=document.getElementById('fCourse').value.trim();
   if (!name||!tid||!date||!time||!endTime||!course) return toast('請填寫所有必要欄位（*）','⚠️');
-  if (course.length > 20) return toast('課程名稱不能超過 20 個字元（目前 ' + course.length + ' 字）','⚠️');
+  if (course.length > 70) return toast('課程名稱不能超過 70 個字元（目前 ' + course.length + ' 字）','⚠️');
   if (!currentUser) return toast('請先登入', '⚠️');
   const [sh,sm]=time.split(':').map(Number);
   const [eh,em]=endTime.split(':').map(Number);
