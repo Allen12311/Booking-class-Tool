@@ -1887,10 +1887,15 @@ function getGcalSyncEmail() {
 }
 function isGcalSyncAccount() {
   var e = getGcalSyncEmail();
-  return e && currentUser && currentUser.email === e;
+  var result = e && currentUser && currentUser.email === e;
+  console.log('[GCal] isGcalSyncAccount:', result, '| syncEmail:', e, '| currentUser:', currentUser ? currentUser.email : 'null');
+  return result;
 }
 function initGcalClient() {
-  if (!window.google || !window.google.accounts) return;
+  if (!window.google || !window.google.accounts) {
+    console.warn('[GCal] GIS SDK 尚未載入');
+    return;
+  }
   gcalTokenClient = window.google.accounts.oauth2.initTokenClient({
     client_id: GCAL_CLIENT_ID,
     scope: GCAL_SCOPE,
@@ -1903,13 +1908,19 @@ function initGcalClient() {
       }
       gcalAccessToken = resp.access_token;
       gcalTokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
-      console.log('[GCal] token 取得成功');
+      console.log('[GCal] token 取得成功，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
       if (gcalPendingAction) { var a = gcalPendingAction; gcalPendingAction = null; a(); }
     }
   });
+  console.log('[GCal] initGcalClient 完成');
 }
 function ensureGcalToken(callback) {
-  if (gcalAccessToken && Date.now() < gcalTokenExpiry) { callback(); return; }
+  if (gcalAccessToken && Date.now() < gcalTokenExpiry) {
+    console.log('[GCal] token 仍有效，直接執行');
+    callback();
+    return;
+  }
+  console.log('[GCal] token 不存在或已過期，重新取得');
   if (!gcalTokenClient) { initGcalClient(); }
   if (!gcalTokenClient) { toast('Google Calendar SDK 尚未載入，請重新整理', '⚠️'); return; }
   gcalPendingAction = callback;
@@ -1937,16 +1948,26 @@ function bookingToCalEvent(b) {
   };
 }
 function gcalCreateEvent(booking) {
-  if (!isGcalSyncAccount()) return;
+  console.log('[GCal] gcalCreateEvent 呼叫，booking:', booking.id, booking.course);
+  if (!isGcalSyncAccount()) {
+    console.log('[GCal] 非同步帳號，跳過');
+    return;
+  }
   ensureGcalToken(async function() {
     try {
+      var eventData = bookingToCalEvent(booking);
+      console.log('[GCal] 準備建立事件:', eventData.summary, eventData.start);
       var resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + gcalAccessToken, 'Content-Type': 'application/json' },
-        body: JSON.stringify(bookingToCalEvent(booking))
+        body: JSON.stringify(eventData)
       });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
       var data = await resp.json();
+      if (!resp.ok) {
+        console.error('[GCal] API 錯誤:', resp.status, data);
+        throw new Error('HTTP ' + resp.status + ' ' + JSON.stringify(data.error));
+      }
+      console.log('[GCal] 建立成功，eventId:', data.id);
       if (data.id) {
         db.collection((cachedBasePath || getUserPath()) + '/bookings').doc(booking.id)
           .update({ gcalEventId: data.id }).catch(function(){});
@@ -1954,7 +1975,10 @@ function gcalCreateEvent(booking) {
         if (idx >= 0) bookings[idx].gcalEventId = data.id;
       }
       toast('已同步至 Google 日曆 📅', '✅');
-    } catch(e) { console.error('[GCal] 建立失敗:', e); toast('Google 日曆同步失敗：' + e.message, '⚠️'); }
+    } catch(e) {
+      console.error('[GCal] 建立失敗:', e);
+      toast('Google 日曆同步失敗：' + e.message, '⚠️');
+    }
   });
 }
 function gcalUpdateEvent(booking) {
