@@ -1037,15 +1037,9 @@ function onAuthStateChanged(user) {
     } else {
       gcalAccessToken = null;
       gcalTokenExpiry = 0;
-      // token 不存在或已過期，若有設定同步帳號則靜默取得新 token
+      // token 過期或不存在，靜默取得新 token（不彈窗）
       if (gcalGet(GCAL_SYNC_KEY) && gcalGet(GCAL_DISABLED_KEY) !== '1' && gcalGet(GCAL_DENIED_KEY) !== '1') {
-        setTimeout(function() {
-          if (!gcalTokenClient) initGcalClient();
-          if (gcalTokenClient) {
-            console.log('[GCal] 登入後靜默取得新 token');
-            gcalTokenClient.requestAccessToken({ prompt: '' });
-          }
-        }, 2000);
+        gcalSilentRefresh();
       }
     }
     // 自動把登入者設為同步帳號（若尚未設定，且用戶未主動關閉同步）
@@ -1397,10 +1391,7 @@ function signInWithGoogle() {
       } else if (localStorage.getItem(deniedKey) !== '1') {
         // 已授權過（Google 不再給 accessToken），嘗試靜默取得
         console.log('[GCal] 登入結果無 accessToken，嘗試靜默取得');
-        setTimeout(function() {
-          if (!gcalTokenClient) initGcalClient();
-          if (gcalTokenClient) gcalTokenClient.requestAccessToken({ prompt: '' });
-        }, 1500);
+        gcalSilentRefresh();
       }
     })
     .catch(function(err) {
@@ -1971,6 +1962,27 @@ function autoCalcDuration() {
   hint.style.color = 'var(--sage)';
   hint.textContent = '✓ 課程時長：' + (hrs>0 ? hrs+'小時'+(mins>0?mins+'分鐘':'') : mins+'分鐘');
 }
+// 靜默取得 token（等待 GIS SDK 載入後才執行，不彈視窗）
+function gcalSilentRefresh(retryCount) {
+  retryCount = retryCount || 0;
+  if (retryCount > 10) {
+    console.warn('[GCal] 靜默 refresh 失敗：GIS SDK 載入超時');
+    return;
+  }
+  if (!window.google || !window.google.accounts) {
+    // SDK 未載入，500ms 後重試
+    setTimeout(function() { gcalSilentRefresh(retryCount + 1); }, 500);
+    return;
+  }
+  if (!gcalTokenClient) initGcalClient();
+  if (!gcalTokenClient) {
+    setTimeout(function() { gcalSilentRefresh(retryCount + 1); }, 500);
+    return;
+  }
+  console.log('[GCal] 靜默取得新 token（retry ' + retryCount + '）');
+  gcalTokenClient.requestAccessToken({ prompt: '' });
+}
+
 // ── Google Calendar 同步 ──
 var GCAL_CLIENT_ID    = '1005174937199-vosakk8jd225cclq5jhkpj8vijqqm478.apps.googleusercontent.com';
 var GCAL_SCOPE        = 'https://www.googleapis.com/auth/calendar.events';
@@ -2081,27 +2093,37 @@ function bookingToCalEvent(b) {
     b.notes      ? '備註：' + b.notes       : ''
   ].filter(Boolean).join('\n');
 
-  // 加上台灣時區偏移 +08:00，確保 API 不會誤判為 UTC
-  // 例如 23:00 → "2024-04-17T23:00:00+08:00"，不會跑到隔天
   var endTime = b.endTime || b.time;
-  // 處理跨午夜（23:00~00:30 這類情況）
-  var startMin = parseInt(b.time.split(':')[0])*60 + parseInt(b.time.split(':')[1]);
-  var endMin   = parseInt(endTime.split(':')[0])*60 + parseInt(endTime.split(':')[1]);
-  var endDate  = b.date;
+
+  // 跨午夜處理：結束時間 <= 開始時間，代表跨過午夜
+  var startH = parseInt(b.time.split(':')[0],   10);
+  var startM = parseInt(b.time.split(':')[1],   10);
+  var endH   = parseInt(endTime.split(':')[0],  10);
+  var endM   = parseInt(endTime.split(':')[1],  10);
+  var startMin = startH * 60 + startM;
+  var endMin   = endH   * 60 + endM;
+
+  var endDate = b.date;
   if (endMin <= startMin) {
-    // 跨午夜：結束時間加一天
-    var d = new Date(b.date + 'T00:00:00+08:00');
-    d.setDate(d.getDate() + 1);
-    endDate = d.getFullYear() + '-' +
-      String(d.getMonth()+1).padStart(2,'0') + '-' +
-      String(d.getDate()).padStart(2,'0');
+    // 跨午夜：endDate 加一天（純字串運算，不依賴 JS Date 時區）
+    var parts = b.date.split('-');
+    var y = parseInt(parts[0], 10);
+    var mo = parseInt(parts[1], 10);
+    var d  = parseInt(parts[2], 10) + 1;
+    var daysInMonth = new Date(y, mo, 0).getDate(); // 當月天數
+    if (d > daysInMonth) { d = 1; mo++; }
+    if (mo > 12) { mo = 1; y++; }
+    endDate = y + '-' + String(mo).padStart(2,'0') + '-' + String(d).padStart(2,'0');
   }
 
+  // 重要：只使用 timeZone，不加 UTC offset (+08:00)
+  // Google Calendar API 官方建議：dateTime 不帶 offset 時，以 timeZone 欄位解讀
+  // 若同時帶 offset 和 timeZone，有些情況 API 會用 offset 轉 UTC 後再用 timeZone 換算，造成誤差
   return {
     summary: '📚 ' + b.course + '｜' + b.name + '（' + tn + '）',
     description: desc,
-    start: { dateTime: b.date + 'T' + b.time    + ':00+08:00', timeZone: 'Asia/Taipei' },
-    end:   { dateTime: endDate  + 'T' + endTime  + ':00+08:00', timeZone: 'Asia/Taipei' },
+    start: { dateTime: b.date  + 'T' + b.time    + ':00', timeZone: 'Asia/Taipei' },
+    end:   { dateTime: endDate + 'T' + endTime   + ':00', timeZone: 'Asia/Taipei' },
     colorId: '5',
     extendedProperties: { private: { bookingId: b.id } }
   };
