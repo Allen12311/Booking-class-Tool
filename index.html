@@ -2100,9 +2100,17 @@ function gcalSilentRefresh(retryCount) {
 }
 
 var GCAL_TITLE_FORMAT_KEY = 'sb_gcal_title_fmt';
-var GCAL_DEFAULT_TITLE_FORMAT = '📖 {time}  {teacher} / {course}';
+var GCAL_FORMAT_VERSION_KEY = 'sb_gcal_fmt_ver';
+var GCAL_FORMAT_VERSION = '2'; // 版本升級時自動重置為新預設格式
+var GCAL_DEFAULT_TITLE_FORMAT = '📖 {time} {teacher} / {course}';
 
 function getGcalTitleFormat() {
+  // 版本不符時清除舊格式，使用新預設值
+  var storedVer = gcalGet(GCAL_FORMAT_VERSION_KEY);
+  if (storedVer !== GCAL_FORMAT_VERSION) {
+    gcalRemove(GCAL_TITLE_FORMAT_KEY);
+    gcalSet(GCAL_FORMAT_VERSION_KEY, GCAL_FORMAT_VERSION);
+  }
   return gcalGet(GCAL_TITLE_FORMAT_KEY) || GCAL_DEFAULT_TITLE_FORMAT;
 }
 
