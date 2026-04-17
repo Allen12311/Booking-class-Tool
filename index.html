@@ -301,6 +301,7 @@ tbody tr:hover { background: var(--sky-light); }
   #notifBtn { display: none !important; }
   #exportBtn { display: none !important; }
   #newBookingBtn { display: none !important; }
+  #gcalBtn { display: none !important; }
 
   /* Hide sidebar, show drawer + mobile nav */
   .sidebar { display: none; }
@@ -389,6 +390,9 @@ tbody tr:hover { background: var(--sky-light); }
       <span>👥</span><span class="btn-label" style="font-size:11px">群組</span>
     </button>
 
+    <button class="btn btn-outline btn-sm" id="gcalBtn" onclick="openGcalSettings()" title="Google 日曆同步" style="display:flex;align-items:center;gap:5px">
+      <span>📅</span><span class="btn-label" style="font-size:11px">日曆同步</span>
+    </button>
     <button class="btn btn-outline btn-sm" id="notifBtn" onclick="toggleNotification()" title="課程提醒通知" style="display:flex;align-items:center;gap:5px">
       <span id="notifIcon">🔔</span><span id="notifLabel" class="btn-label" style="font-size:11px">通知</span>
     </button>
