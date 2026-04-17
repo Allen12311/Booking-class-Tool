@@ -7,6 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@300;400;600;700&family=DM+Mono:wght@300;400;500&family=Cormorant+Garamond:ital,wght@0,300;0,600;1,300&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -604,6 +605,7 @@ tbody tr:hover { background: var(--sky-light); }
       </div>
     </div>
     <button class="btn btn-outline btn-sm" id="drawerNotifBtn" onclick="toggleNotification();closeDrawer()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">🔔 課程通知</button>
+    <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="openGcalSettings();closeDrawer()">📅 Google 日曆同步</button>
     <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="openFirebaseConfig();closeDrawer()">🔥 Firebase 設定</button>
     <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="exportCSV();closeDrawer()">📤 匯出 CSV</button>
     <button class="btn btn-outline btn-sm" id="drawerAuthBtn" onclick="handleAuth();closeDrawer()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">👤 登入</button>
@@ -815,6 +817,39 @@ tbody tr:hover { background: var(--sky-light); }
 </div>
 
 <!-- CONFIRM MODAL -->
+<!-- GOOGLE CALENDAR SETTINGS MODAL -->
+<div class="overlay" id="gcalOverlay">
+  <div class="modal" style="width:460px;max-width:95vw">
+    <div class="modal-header">
+      <div><div class="modal-title">📅 Google 日曆同步</div><div class="modal-sub">Calendar Sync Settings</div></div>
+      <button class="close-btn" onclick="closeModal('gcalOverlay')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="background:var(--cream);border-radius:8px;padding:14px;font-size:12px;color:var(--text-sub);line-height:1.7;margin-bottom:16px">
+        📌 指定一個 Google 帳號作為日曆同步帳號。當該帳號登入並操作預約時，系統會自動將預約新增、更新或刪除到該帳號的 Google 日曆。
+      </div>
+      <div id="gcalCurrentStatus" style="margin-bottom:16px;padding:10px 14px;border-radius:8px;font-size:13px"></div>
+      <div class="form-row full">
+        <div class="form-group">
+          <label class="form-label">同步帳號 Email</label>
+          <input class="form-input" id="gcalEmailInput" placeholder="example@gmail.com" type="email">
+          <div style="font-size:11px;color:var(--text-sub);margin-top:4px">填入要同步 Google 日曆的帳號 Email，留空則關閉同步</div>
+        </div>
+      </div>
+      <div id="gcalAuthSection" style="display:none;margin-top:12px;padding:12px 14px;background:var(--sky-light);border-radius:8px">
+        <div style="font-size:12px;color:var(--sky);margin-bottom:8px">✓ 你是同步帳號，請先授權 Google 日曆存取權限：</div>
+        <button class="btn btn-sm" onclick="gcalAuthorize()" style="background:var(--sky);color:#fff;border:none;border-radius:4px;cursor:pointer;padding:7px 16px;font-family:inherit;font-size:12px">🔑 授權 Google 日曆</button>
+        <span id="gcalAuthStatus" style="font-size:11px;color:var(--text-sub);margin-left:10px"></span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" onclick="clearGcalSettings()">關閉同步</button>
+      <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('gcalOverlay')">取消</button>
+      <button class="btn btn-gold btn-sm" onclick="saveGcalSettings()">儲存</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="confirmOverlay">
   <div class="modal" style="width:360px;max-width:95vw">
     <div class="modal-header">
@@ -1834,6 +1869,189 @@ function autoCalcDuration() {
   hint.style.color = 'var(--sage)';
   hint.textContent = '✓ 課程時長：' + (hrs>0 ? hrs+'小時'+(mins>0?mins+'分鐘':'') : mins+'分鐘');
 }
+// ── Google Calendar 同步 ──
+var GCAL_CLIENT_ID = '1005174937199-vosakk8jd225cclq5jhkpj8vijqqm478.apps.googleusercontent.com';
+var GCAL_SCOPE     = 'https://www.googleapis.com/auth/calendar.events';
+var GCAL_SYNC_KEY  = 'sb_gcal_sync_email';
+var gcalTokenClient = null;
+var gcalAccessToken = null;
+var gcalTokenExpiry = 0;
+var gcalPendingAction = null;
+
+function getGcalSyncEmail() {
+  return localStorage.getItem(GCAL_SYNC_KEY) || '';
+}
+function isGcalSyncAccount() {
+  var e = getGcalSyncEmail();
+  return e && currentUser && currentUser.email === e;
+}
+function initGcalClient() {
+  if (!window.google || !window.google.accounts) return;
+  gcalTokenClient = window.google.accounts.oauth2.initTokenClient({
+    client_id: GCAL_CLIENT_ID,
+    scope: GCAL_SCOPE,
+    callback: function(resp) {
+      if (resp.error) {
+        console.error('[GCal] token 失敗:', resp.error);
+        toast('Google Calendar 授權失敗：' + resp.error, '⚠️');
+        gcalPendingAction = null;
+        return;
+      }
+      gcalAccessToken = resp.access_token;
+      gcalTokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
+      console.log('[GCal] token 取得成功');
+      if (gcalPendingAction) { var a = gcalPendingAction; gcalPendingAction = null; a(); }
+    }
+  });
+}
+function ensureGcalToken(callback) {
+  if (gcalAccessToken && Date.now() < gcalTokenExpiry) { callback(); return; }
+  if (!gcalTokenClient) { initGcalClient(); }
+  if (!gcalTokenClient) { toast('Google Calendar SDK 尚未載入，請重新整理', '⚠️'); return; }
+  gcalPendingAction = callback;
+  gcalTokenClient.requestAccessToken({ prompt: '' });
+}
+function bookingToCalEvent(b) {
+  var t = teachers.find(function(x){ return x.id === b.teacherId; });
+  var tn = t ? t.name : '未知老師';
+  var desc = [
+    '學生：' + b.name + (b.phone ? '（' + b.phone + '）' : ''),
+    '課程：' + b.course,
+    '老師：' + tn,
+    '上課方式：' + (b.mode || '實體'),
+    b.assistant ? '助教：' + b.assistant : '',
+    b.syllabus   ? '課綱：' + b.syllabus   : '',
+    b.meetingUrl ? '連結：' + b.meetingUrl  : '',
+    b.notes      ? '備註：' + b.notes       : ''
+  ].filter(Boolean).join('\n');
+  return {
+    summary: '📚 ' + b.course + '｜' + b.name + '（' + tn + '）',
+    description: desc,
+    start: { dateTime: b.date + 'T' + b.time + ':00', timeZone: 'Asia/Taipei' },
+    end:   { dateTime: b.date + 'T' + (b.endTime || b.time) + ':00', timeZone: 'Asia/Taipei' },
+    colorId: '5'
+  };
+}
+function gcalCreateEvent(booking) {
+  if (!isGcalSyncAccount()) return;
+  ensureGcalToken(async function() {
+    try {
+      var resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + gcalAccessToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify(bookingToCalEvent(booking))
+      });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      var data = await resp.json();
+      if (data.id) {
+        db.collection((cachedBasePath || getUserPath()) + '/bookings').doc(booking.id)
+          .update({ gcalEventId: data.id }).catch(function(){});
+        var idx = bookings.findIndex(function(x){ return x.id === booking.id; });
+        if (idx >= 0) bookings[idx].gcalEventId = data.id;
+      }
+      toast('已同步至 Google 日曆 📅', '✅');
+    } catch(e) { console.error('[GCal] 建立失敗:', e); toast('Google 日曆同步失敗：' + e.message, '⚠️'); }
+  });
+}
+function gcalUpdateEvent(booking) {
+  if (!isGcalSyncAccount()) return;
+  if (!booking.gcalEventId) { gcalCreateEvent(booking); return; }
+  ensureGcalToken(async function() {
+    try {
+      var resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events/' + booking.gcalEventId, {
+        method: 'PUT',
+        headers: { 'Authorization': 'Bearer ' + gcalAccessToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify(bookingToCalEvent(booking))
+      });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      toast('Google 日曆已更新 📅', '✅');
+    } catch(e) { console.error('[GCal] 更新失敗:', e); toast('Google 日曆更新失敗：' + e.message, '⚠️'); }
+  });
+}
+function gcalDeleteEvent(booking) {
+  if (!isGcalSyncAccount()) return;
+  if (!booking.gcalEventId) return;
+  ensureGcalToken(async function() {
+    try {
+      var resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events/' + booking.gcalEventId, {
+        method: 'DELETE',
+        headers: { 'Authorization': 'Bearer ' + gcalAccessToken }
+      });
+      if (resp.status !== 204 && !resp.ok) throw new Error('HTTP ' + resp.status);
+      toast('Google 日曆事件已刪除 🗑️', '✅');
+    } catch(e) { console.error('[GCal] 刪除失敗:', e); }
+  });
+}
+
+function openGcalSettings() {
+  var syncEmail = getGcalSyncEmail();
+  var emailInput = document.getElementById('gcalEmailInput');
+  var statusDiv  = document.getElementById('gcalCurrentStatus');
+  var authSection = document.getElementById('gcalAuthSection');
+  var authStatus  = document.getElementById('gcalAuthStatus');
+  if (emailInput) emailInput.value = syncEmail;
+  // 顯示目前狀態
+  if (syncEmail) {
+    statusDiv.style.background = '#e6f4ec';
+    statusDiv.style.color = '#2d7a4a';
+    statusDiv.textContent = '✓ 目前同步帳號：' + syncEmail;
+  } else {
+    statusDiv.style.background = 'var(--cream)';
+    statusDiv.style.color = 'var(--text-sub)';
+    statusDiv.textContent = '目前未設定同步帳號';
+  }
+  // 若當前登入者是同步帳號，顯示授權區塊
+  if (isGcalSyncAccount()) {
+    authSection.style.display = 'block';
+    authStatus.textContent = gcalAccessToken && Date.now() < gcalTokenExpiry ? '✓ 已授權' : '尚未授權';
+  } else {
+    authSection.style.display = 'none';
+  }
+  openModal('gcalOverlay');
+}
+
+function saveGcalSettings() {
+  var email = document.getElementById('gcalEmailInput').value.trim().toLowerCase();
+  localStorage.setItem(GCAL_SYNC_KEY, email);
+  closeModal('gcalOverlay');
+  if (email) {
+    toast('同步帳號已設定：' + email, '📅');
+    // 若當前登入者就是同步帳號，立即提示授權
+    if (currentUser && currentUser.email === email) {
+      setTimeout(function() {
+        toast('請重新開啟「Google 日曆同步」頁面並點擊授權', 'ℹ️');
+      }, 1500);
+    }
+  } else {
+    toast('Google 日曆同步已關閉', '📅');
+  }
+}
+
+function clearGcalSettings() {
+  localStorage.removeItem(GCAL_SYNC_KEY);
+  gcalAccessToken = null;
+  closeModal('gcalOverlay');
+  toast('Google 日曆同步已關閉', '📅');
+}
+
+function gcalAuthorize() {
+  if (!gcalTokenClient) {
+    initGcalClient();
+    if (!gcalTokenClient) {
+      toast('Google Calendar SDK 尚未載入，請重新整理頁面', '⚠️');
+      return;
+    }
+  }
+  gcalPendingAction = function() {
+    var authStatus = document.getElementById('gcalAuthStatus');
+    if (authStatus) authStatus.textContent = '✓ 授權成功！';
+    toast('Google 日曆授權成功，預約將自動同步 📅', '✅');
+  };
+  gcalTokenClient.requestAccessToken({ prompt: 'consent' });
+}
+
+// ── Google Calendar 同步 END ──
+
 async function saveBooking() {
   const name=document.getElementById('fName').value.trim();
   const tid=document.getElementById('fTeacher').value;
@@ -1899,8 +2117,14 @@ async function saveBooking() {
   // 背景寫入 Firestore，失敗時回滾
   try {
     await dbSetBooking(obj);
+    // Google Calendar 同步（背景執行，不阻塞主流程）
+    if (isNew) {
+      gcalCreateEvent(obj);
+    } else {
+      gcalUpdateEvent(obj);
+    }
   } catch(e) {
-    bookings = prevBookings; // 回滾
+    bookings = prevBookings;
     renderTeachers();
     renderAll();
     toast('儲存失敗，已回復：' + e.message, '⚠️');
@@ -1961,8 +2185,10 @@ function deleteBooking(id) {
       toast('預約已刪除', '🗑️');
       try {
         await dbDeleteBooking(id);
+        // Google Calendar 同步刪除（背景執行）
+        gcalDeleteEvent(b);
       } catch(e) {
-        bookings = prevBookings; // 回滾
+        bookings = prevBookings;
         renderTeachers();
         renderAll();
         toast('刪除失敗，已回復：' + e.message, '⚠️');
@@ -2564,6 +2790,13 @@ loadLogoSettings();
 
 // ── 啟動 Firebase（等待頁面與 SDK 完全載入）──
 window.addEventListener('load', async function() {
+  // 初始化 Google Calendar GIS client（SDK 可能尚未載入，延遲等待）
+  setTimeout(function() {
+    if (window.google && window.google.accounts) {
+      initGcalClient();
+      console.log('[GCal] GIS client 初始化完成');
+    }
+  }, 2000);
   console.log('[Firebase] window.load 觸發');
   var cfg = getFirebaseConfig();
   if (cfg) {
