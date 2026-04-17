@@ -838,8 +838,9 @@ tbody tr:hover { background: var(--sky-light); }
       <div style="background:var(--cream);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--text-sub);line-height:1.7;margin-bottom:16px">
         ℹ️ 登入時系統會自動申請 Google 日曆權限。若同步失敗或 token 過期，點下方按鈕重新授權。
       </div>
-      <div id="gcalAuthSection" style="margin-top:4px">
+      <div id="gcalAuthSection" style="margin-top:4px;display:flex;flex-direction:column;gap:8px">
         <button class="btn btn-gold btn-sm" onclick="gcalAuthorize()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">🔑 重新授權 Google 日曆</button>
+        <button class="btn btn-sm" onclick="gcalPullFromCalendar()" id="gcalPullBtn" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:7px;font-family:inherit">🔄 從 Google 日曆同步狀態</button>
         <div id="gcalAuthStatus" style="font-size:11px;color:var(--text-sub);margin-top:8px;text-align:center"></div>
       </div>
     </div>
@@ -2007,9 +2008,7 @@ function getGcalSyncEmail() {
 }
 function isGcalSyncAccount() {
   var e = getGcalSyncEmail();
-  var result = e && currentUser && currentUser.email === e;
-  console.log('[GCal] isGcalSyncAccount:', result, '| syncEmail:', e, '| currentUser:', currentUser ? currentUser.email : 'null');
-  return result;
+  return !!(e && currentUser && currentUser.email === e);
 }
 function initGcalClient() {
   if (!window.google || !window.google.accounts) {
@@ -2031,6 +2030,7 @@ function initGcalClient() {
       // 存到 sessionStorage，同分頁重整後仍可用
       localStorage.setItem('sb_gcal_token_' + (currentUser ? currentUser.uid : 'anon'), gcalAccessToken);
       localStorage.setItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'), gcalTokenExpiry.toString());
+      if (gcalTokenTimeout) { clearTimeout(gcalTokenTimeout); gcalTokenTimeout = null; }
       console.log('[GCal] token 取得成功，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
       updateGcalWidget();
       if (gcalPendingAction) { var a = gcalPendingAction; gcalPendingAction = null; a(); }
@@ -2038,34 +2038,34 @@ function initGcalClient() {
   });
   console.log('[GCal] initGcalClient 完成');
 }
+// timeout handle 存在外部，讓 token callback 可以清除
+var gcalTokenTimeout = null;
+
 function ensureGcalToken(callback) {
   if (gcalAccessToken && Date.now() < gcalTokenExpiry) {
-    console.log('[GCal] token 仍有效，直接執行');
     callback();
     return;
   }
-  // token 過期，清除 sessionStorage
   gcalAccessToken = null;
   gcalTokenExpiry = 0;
-  localStorage.removeItem('sb_gcal_token_' + (currentUser ? currentUser.uid : 'anon'));
+  localStorage.removeItem('sb_gcal_token_'  + (currentUser ? currentUser.uid : 'anon'));
   localStorage.removeItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'));
-  updateGcalWidget(); // 立即顯示「需重新授權」
-  console.log('[GCal] token 不存在或已過期，重新取得');
-  if (!gcalTokenClient) { initGcalClient(); }
+  updateGcalWidget();
+  console.log('[GCal] token 過期，重新取得');
+  if (!gcalTokenClient) initGcalClient();
   if (!gcalTokenClient) { toast('Google Calendar SDK 尚未載入，請重新整理', '⚠️'); return; }
   gcalPendingAction = callback;
-  // 設定 10 秒 timeout，靜默取得失敗時提示用戶手動授權
-  var tokenTimeout = setTimeout(function() {
+  // 10 秒 timeout，在 initGcalClient 的 callback 裡清除（GIS 不支援 requestAccessToken 的 callback 參數）
+  if (gcalTokenTimeout) clearTimeout(gcalTokenTimeout);
+  gcalTokenTimeout = setTimeout(function() {
     if (gcalPendingAction === callback) {
       gcalPendingAction = null;
-      console.warn('[GCal] 靜默取得 token 逾時，請手動授權');
+      gcalTokenTimeout = null;
+      console.warn('[GCal] 靜默取得 token 逾時');
       toast('Google 日曆 token 已過期，請前往「📅 日曆同步」重新授權', '⚠️');
     }
   }, 10000);
-  gcalTokenClient.requestAccessToken({ prompt: '',
-    // token 取得後清除 timeout
-    callback: function() { clearTimeout(tokenTimeout); }
-  });
+  gcalTokenClient.requestAccessToken({ prompt: '' }); // GIS 只支援 prompt，不支援 callback 參數
 }
 function bookingToCalEvent(b) {
   var t = teachers.find(function(x){ return x.id === b.teacherId; });
@@ -2080,12 +2080,30 @@ function bookingToCalEvent(b) {
     b.meetingUrl ? '連結：' + b.meetingUrl  : '',
     b.notes      ? '備註：' + b.notes       : ''
   ].filter(Boolean).join('\n');
+
+  // 加上台灣時區偏移 +08:00，確保 API 不會誤判為 UTC
+  // 例如 23:00 → "2024-04-17T23:00:00+08:00"，不會跑到隔天
+  var endTime = b.endTime || b.time;
+  // 處理跨午夜（23:00~00:30 這類情況）
+  var startMin = parseInt(b.time.split(':')[0])*60 + parseInt(b.time.split(':')[1]);
+  var endMin   = parseInt(endTime.split(':')[0])*60 + parseInt(endTime.split(':')[1]);
+  var endDate  = b.date;
+  if (endMin <= startMin) {
+    // 跨午夜：結束時間加一天
+    var d = new Date(b.date + 'T00:00:00+08:00');
+    d.setDate(d.getDate() + 1);
+    endDate = d.getFullYear() + '-' +
+      String(d.getMonth()+1).padStart(2,'0') + '-' +
+      String(d.getDate()).padStart(2,'0');
+  }
+
   return {
     summary: '📚 ' + b.course + '｜' + b.name + '（' + tn + '）',
     description: desc,
-    start: { dateTime: b.date + 'T' + b.time + ':00', timeZone: 'Asia/Taipei' },
-    end:   { dateTime: b.date + 'T' + (b.endTime || b.time) + ':00', timeZone: 'Asia/Taipei' },
-    colorId: '5'
+    start: { dateTime: b.date + 'T' + b.time    + ':00+08:00', timeZone: 'Asia/Taipei' },
+    end:   { dateTime: endDate  + 'T' + endTime  + ':00+08:00', timeZone: 'Asia/Taipei' },
+    colorId: '5',
+    extendedProperties: { private: { bookingId: b.id } }
   };
 }
 function gcalCreateEvent(booking) {
@@ -2189,6 +2207,90 @@ function updateGcalWidget() {
     timeEl.style.color = 'var(--rust)';
     document.getElementById('gcalSyncWidget').style.borderColor = 'var(--rust)';
   }
+}
+
+// ── 雙向同步：從 Google 日曆拉取最新狀態 ──
+async function gcalPullFromCalendar() {
+  if (!isGcalSyncAccount()) {
+    toast('請先設定同步帳號', '⚠️');
+    return;
+  }
+  var pullBtn = document.getElementById('gcalPullBtn');
+  if (pullBtn) { pullBtn.textContent = '🔄 同步中…'; pullBtn.disabled = true; }
+
+  ensureGcalToken(async function() {
+    try {
+      // 取得未來 90 天的 Google 日曆事件
+      var now = new Date();
+      var future = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+      var timeMin = now.toISOString();
+      var timeMax = future.toISOString();
+
+      var resp = await fetch(
+        'https://www.googleapis.com/calendar/v3/calendars/primary/events'
+        + '?timeMin=' + encodeURIComponent(timeMin)
+        + '&timeMax=' + encodeURIComponent(timeMax)
+        + '&privateExtendedProperty=bookingId%3D*'  // 只抓本系統建立的事件
+        + '&maxResults=250&singleEvents=true',
+        { headers: { 'Authorization': 'Bearer ' + gcalAccessToken } }
+      );
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      var data = await resp.json();
+      var events = data.items || [];
+
+      // 比對本地 bookings 與 Google 日曆事件
+      var updated = 0;
+      var gcalEventMap = {};
+      events.forEach(function(ev) {
+        var bid = ev.extendedProperties && ev.extendedProperties.private && ev.extendedProperties.private.bookingId;
+        if (bid) gcalEventMap[bid] = ev;
+      });
+
+      // 找出本地有 gcalEventId 但 Google 日曆已刪除的
+      var promises = [];
+      bookings.forEach(function(b) {
+        if (!b.gcalEventId) return;
+        var ev = events.find(function(e){ return e.id === b.gcalEventId; });
+        if (!ev && gcalEventMap[b.id]) {
+          // bookingId 匹配但 eventId 變了（例如曾被重建），更新本地 gcalEventId
+          var newEventId = gcalEventMap[b.id].id;
+          promises.push(
+            db.collection((cachedBasePath || getUserPath()) + '/bookings').doc(b.id)
+              .update({ gcalEventId: newEventId })
+              .then(function(){ b.gcalEventId = newEventId; updated++; })
+              .catch(function(){})
+          );
+        }
+      });
+
+      // 找出本地沒有 gcalEventId 但 Google 日曆有 bookingId 對應的
+      bookings.forEach(function(b) {
+        if (b.gcalEventId) return;
+        if (gcalEventMap[b.id]) {
+          promises.push(
+            db.collection((cachedBasePath || getUserPath()) + '/bookings').doc(b.id)
+              .update({ gcalEventId: gcalEventMap[b.id].id })
+              .then(function(){ b.gcalEventId = gcalEventMap[b.id].id; updated++; })
+              .catch(function(){})
+          );
+        }
+      });
+
+      await Promise.all(promises);
+      gcalSet(GCAL_LAST_SYNC_KEY, new Date().toISOString());
+      updateGcalWidget();
+
+      var msg = '同步完成，日曆事件：' + events.length + ' 筆' + (updated > 0 ? '，更新連結：' + updated + ' 筆' : '');
+      toast(msg, '✅');
+      if (pullBtn) pullBtn.textContent = '🔄 從 Google 日曆同步狀態';
+      // 更新設定頁顯示
+      openGcalSettings();
+    } catch(e) {
+      console.error('[GCal] 拉取失敗:', e);
+      toast('從 Google 日曆同步失敗：' + e.message, '⚠️');
+      if (pullBtn) { pullBtn.textContent = '🔄 從 Google 日曆同步狀態'; pullBtn.disabled = false; }
+    }
+  });
 }
 
 function openGcalSettings() {
