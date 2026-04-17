@@ -1002,8 +1002,8 @@ function onAuthStateChanged(user) {
   currentUser = user;
   if (user) {
     document.getElementById('loginOverlay').style.display = 'none';
-    // 自動把登入者設為同步帳號（若尚未設定）
-    if (!getGcalSyncEmail()) {
+    // 自動把登入者設為同步帳號（若尚未設定，且用戶未主動關閉同步）
+    if (!getGcalSyncEmail() && localStorage.getItem(GCAL_DISABLED_KEY) !== '1') {
       localStorage.setItem(GCAL_SYNC_KEY, user.email);
     }
     var userInfo = document.getElementById('userInfo');
@@ -1303,8 +1303,8 @@ function signInWithGoogle() {
 
   var provider = new firebase.auth.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
-  // 若用戶未曾拒絕，才在登入時一併申請 Calendar 權限
-  if (localStorage.getItem(GCAL_DENIED_KEY) !== '1') {
+  // 若用戶未曾拒絕且未主動關閉同步，才在登入時申請 Calendar 權限
+  if (localStorage.getItem(GCAL_DENIED_KEY) !== '1' && localStorage.getItem(GCAL_DISABLED_KEY) !== '1') {
     provider.addScope('https://www.googleapis.com/auth/calendar.events');
   }
 
@@ -1314,23 +1314,32 @@ function signInWithGoogle() {
       if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
       // 登入成功後：自動把登入者設為同步帳號，並儲存 token
       if (result && result.user) {
-        // 自動設定同步帳號為登入者
-        localStorage.setItem(GCAL_SYNC_KEY, result.user.email);
-        console.log('[GCal] 同步帳號自動設為:', result.user.email);
+        // 只在用戶未主動關閉同步的情況下，才自動設定同步帳號
+        if (localStorage.getItem(GCAL_DISABLED_KEY) !== '1') {
+          localStorage.setItem(GCAL_SYNC_KEY, result.user.email);
+          console.log('[GCal] 同步帳號自動設為:', result.user.email);
+        }
       }
       if (result && result.credential && result.credential.accessToken) {
+        // 首次授權或重新授權：直接從 credential 取得 token
         gcalAccessToken = result.credential.accessToken;
         gcalTokenExpiry = Date.now() + 55 * 60 * 1000;
         sessionStorage.setItem('sb_gcal_token', gcalAccessToken);
         sessionStorage.setItem('sb_gcal_expiry', gcalTokenExpiry.toString());
-        // 成功取得 token，清除拒絕記錄
         localStorage.removeItem(GCAL_DENIED_KEY);
         console.log('[GCal] 登入時取得 Calendar token，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
       } else if (localStorage.getItem(GCAL_DENIED_KEY) !== '1') {
-        // 有申請 scope 但沒拿到 token，代表用戶拒絕了
-        localStorage.setItem(GCAL_DENIED_KEY, '1');
-        localStorage.removeItem(GCAL_SYNC_KEY);
-        console.log('[GCal] 用戶拒絕 Calendar 授權，記錄並不再詢問');
+        // 沒拿到 accessToken，有兩種可能：
+        // a) 用戶已授權過，Google 不再給 accessToken（正常，用靜默模式取得）
+        // b) 用戶明確拒絕（會有 error，在 catch 裡處理）
+        // 這裡先嘗試靜默取得 token
+        console.log('[GCal] 登入結果無 accessToken，嘗試靜默取得');
+        setTimeout(function() {
+          if (!gcalTokenClient) initGcalClient();
+          if (gcalTokenClient) {
+            gcalTokenClient.requestAccessToken({ prompt: '' });
+          }
+        }, 1500);
       }
     })
     .catch(function(err) {
@@ -1340,6 +1349,12 @@ function signInWithGoogle() {
       var msg = '';
 
       if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        // 用戶關閉授權視窗 = 拒絕了 Calendar 權限
+        // 記錄拒絕，但只在這次有申請 scope 的情況下（非 denied 狀態）
+        if (localStorage.getItem(GCAL_DENIED_KEY) !== '1') {
+          localStorage.setItem(GCAL_DENIED_KEY, '1');
+          console.log('[GCal] 用戶關閉授權視窗，記錄拒絕，不再詢問');
+        }
         statusEl.textContent = '登入已取消，請再次點擊登入';
         return;
       } else if (code === 'auth/popup-blocked') {
@@ -1893,10 +1908,11 @@ function autoCalcDuration() {
   hint.textContent = '✓ 課程時長：' + (hrs>0 ? hrs+'小時'+(mins>0?mins+'分鐘':'') : mins+'分鐘');
 }
 // ── Google Calendar 同步 ──
-var GCAL_CLIENT_ID = '1005174937199-vosakk8jd225cclq5jhkpj8vijqqm478.apps.googleusercontent.com';
-var GCAL_SCOPE     = 'https://www.googleapis.com/auth/calendar.events';
-var GCAL_SYNC_KEY  = 'sb_gcal_sync_email';
-var GCAL_DENIED_KEY = 'sb_gcal_denied'; // 用戶曾拒絕授權
+var GCAL_CLIENT_ID   = '1005174937199-vosakk8jd225cclq5jhkpj8vijqqm478.apps.googleusercontent.com';
+var GCAL_SCOPE       = 'https://www.googleapis.com/auth/calendar.events';
+var GCAL_SYNC_KEY    = 'sb_gcal_sync_email';
+var GCAL_DENIED_KEY  = 'sb_gcal_denied';   // 用戶曾拒絕 Google 授權視窗
+var GCAL_DISABLED_KEY = 'sb_gcal_disabled'; // 用戶主動關閉同步
 var gcalTokenClient = null;
 var gcalAccessToken = sessionStorage.getItem('sb_gcal_token') || null;
 var gcalTokenExpiry = parseInt(sessionStorage.getItem('sb_gcal_expiry') || '0', 10);
@@ -1951,7 +1967,18 @@ function ensureGcalToken(callback) {
   if (!gcalTokenClient) { initGcalClient(); }
   if (!gcalTokenClient) { toast('Google Calendar SDK 尚未載入，請重新整理', '⚠️'); return; }
   gcalPendingAction = callback;
-  gcalTokenClient.requestAccessToken({ prompt: '' });
+  // 設定 10 秒 timeout，靜默取得失敗時提示用戶手動授權
+  var tokenTimeout = setTimeout(function() {
+    if (gcalPendingAction === callback) {
+      gcalPendingAction = null;
+      console.warn('[GCal] 靜默取得 token 逾時，請手動授權');
+      toast('Google 日曆 token 已過期，請前往「📅 日曆同步」重新授權', '⚠️');
+    }
+  }, 10000);
+  gcalTokenClient.requestAccessToken({ prompt: '',
+    // token 取得後清除 timeout
+    callback: function() { clearTimeout(tokenTimeout); }
+  });
 }
 function bookingToCalEvent(b) {
   var t = teachers.find(function(x){ return x.id === b.teacherId; });
@@ -2044,11 +2071,12 @@ function openGcalSettings() {
   var syncEmail  = getGcalSyncEmail();
   var tokenOk    = gcalAccessToken && Date.now() < gcalTokenExpiry;
   var denied     = localStorage.getItem(GCAL_DENIED_KEY) === '1';
+  var disabled   = localStorage.getItem(GCAL_DISABLED_KEY) === '1';
 
-  if (denied) {
+  if (disabled || denied) {
     statusDiv.style.background = '#fde8e8';
     statusDiv.style.color = 'var(--rust)';
-    statusDiv.innerHTML = '❌ 已拒絕 Google 日曆授權<br><span style="font-size:11px">點下方「重新授權」即可重新啟用同步</span>';
+    statusDiv.innerHTML = '❌ Google 日曆同步已關閉<br><span style="font-size:11px">點下方「重新授權」即可重新啟用</span>';
   } else if (syncEmail && tokenOk) {
     statusDiv.style.background = '#e6f4ec';
     statusDiv.style.color = '#2d7a4a';
@@ -2068,6 +2096,7 @@ function openGcalSettings() {
 
 function clearGcalSettings() {
   localStorage.removeItem(GCAL_SYNC_KEY);
+  localStorage.setItem(GCAL_DISABLED_KEY, '1'); // 記錄用戶主動關閉
   gcalAccessToken = null;
   sessionStorage.removeItem('sb_gcal_token');
   sessionStorage.removeItem('sb_gcal_expiry');
@@ -2083,8 +2112,9 @@ function gcalAuthorize() {
       return;
     }
   }
-  // 用戶主動授權，清除拒絕記錄
+  // 用戶主動授權，清除拒絕和關閉記錄
   localStorage.removeItem(GCAL_DENIED_KEY);
+  localStorage.removeItem(GCAL_DISABLED_KEY);
   gcalPendingAction = function() {
     var authStatus = document.getElementById('gcalAuthStatus');
     if (authStatus) authStatus.textContent = '✓ 授權成功！';
