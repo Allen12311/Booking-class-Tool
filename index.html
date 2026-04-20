@@ -302,6 +302,7 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
   /* 手機版 header 隱藏通知鈴鐺、匯出、新增預約（FAB 已取代 + 號，功能在 Drawer） */
   #notifBtn { display: none !important; }
   #exportBtn { display: none !important; }
+  #importBtn { display: none !important; }
   #newBookingBtn { display: none !important; }
   /* 手機版 toolbar 同步元件隱藏文字只顯示 icon */
   #gcalSyncWidget .gcal-sync-text { display: none; }
@@ -398,6 +399,9 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
     </button>
     <button class="btn btn-outline btn-sm" id="exportBtn" onclick="exportCSV()" title="匯出CSV" style="display:flex;align-items:center;gap:5px">
       <span>📤</span><span class="btn-label" style="font-size:11px">匯出</span>
+    </button>
+    <button class="btn btn-outline btn-sm" id="importBtn" onclick="openImportModal()" title="匯入CSV" style="display:flex;align-items:center;gap:5px">
+      <span>📥</span><span class="btn-label" style="font-size:11px">匯入</span>
     </button>
     <button class="btn btn-outline btn-sm" id="authBtn" onclick="handleAuth()" style="display:flex;align-items:center;gap:5px">
       <span>👤</span><span class="btn-label" style="font-size:11px">登入</span>
@@ -619,6 +623,7 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
     <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="openGcalSettings();closeDrawer()">📅 Google 日曆同步</button>
     <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="openFirebaseConfig();closeDrawer()">🔥 Firebase 設定</button>
     <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="exportCSV();closeDrawer()">📤 匯出 CSV</button>
+    <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="openImportModal();closeDrawer()">📥 匯入 CSV</button>
     <button class="btn btn-outline btn-sm" id="drawerAuthBtn" onclick="handleAuth();closeDrawer()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">👤 登入</button>
   </div>
 </div>
@@ -871,6 +876,59 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
     <div class="modal-footer" style="justify-content:space-between">
       <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--text-sub);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('gcalExpiredOverlay')">稍後再說</button>
       <button class="btn btn-gold btn-sm" onclick="closeModal('gcalExpiredOverlay');gcalAuthorize()">🔑 立即重新授權</button>
+    </div>
+  </div>
+</div>
+
+<!-- IMPORT CSV MODAL -->
+<div class="overlay" id="importOverlay">
+  <div class="modal" style="width:520px;max-width:95vw">
+    <div class="modal-header">
+      <div><div class="modal-title">📥 匯入預約資料</div><div class="modal-sub">Import from CSV</div></div>
+      <button class="close-btn" onclick="closeModal('importOverlay')">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- 說明 -->
+      <div style="background:var(--cream);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--text-sub);line-height:1.7;margin-bottom:14px">
+        📋 支援本系統匯出的 CSV 格式。<strong style="color:var(--ink)">重複預約（老師＋日期＋時間相同）將自動跳過</strong>，不存在的老師將自動建立。
+      </div>
+      <!-- CSV 欄位說明 -->
+      <div style="margin-bottom:14px">
+        <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:6px">CSV 欄位順序（第一列為標題列）</div>
+        <div style="background:#f0ede8;border-radius:6px;padding:8px 10px;font-family:'DM Mono',monospace;font-size:10px;color:var(--ink);line-height:1.8;overflow-x:auto;white-space:nowrap">
+          客戶姓名, 電話, 老師, 課程, 上課方式, 日期, 時間, 時長, 狀態, 課綱重點, 線上連結, 備註
+        </div>
+        <div style="font-size:11px;color:var(--text-sub);margin-top:4px">
+          日期格式：YYYY-MM-DD　時間格式：HH:MM　狀態：已確認 / 待確認 / 已完成 / 已取消
+        </div>
+      </div>
+      <!-- 拖曳區 -->
+      <div id="importDropZone"
+        style="border:2px dashed var(--border);border-radius:10px;padding:28px 20px;text-align:center;cursor:pointer;transition:all 0.2s;margin-bottom:12px"
+        onclick="document.getElementById('importFileInput').click()"
+        ondragover="event.preventDefault();this.style.borderColor='var(--gold)';this.style.background='var(--gold-pale)'"
+        ondragleave="this.style.borderColor='var(--border)';this.style.background=''"
+        ondrop="onImportFileDrop(event)">
+        <div style="font-size:28px;margin-bottom:8px">📂</div>
+        <div style="font-size:13px;color:var(--ink);font-weight:600">點擊選擇或拖曳 CSV 檔案</div>
+        <div style="font-size:11px;color:var(--text-sub);margin-top:4px">支援 .csv 格式</div>
+      </div>
+      <input type="file" id="importFileInput" accept=".csv" style="display:none" onchange="onImportFileSelect(event)">
+      <!-- 下載範本 -->
+      <div style="text-align:center;margin-bottom:4px">
+        <button onclick="downloadImportTemplate()" style="background:transparent;border:none;color:var(--sky);font-size:12px;cursor:pointer;font-family:inherit;text-decoration:underline;padding:0">
+          📄 下載匯入範本 (.csv)
+        </button>
+      </div>
+      <!-- 預覽 -->
+      <div id="importPreview" style="display:none">
+        <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:8px">預覽</div>
+        <div id="importPreviewContent"></div>
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content:space-between">
+      <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('importOverlay')">取消</button>
+      <button id="importConfirmBtn" class="btn btn-gold btn-sm" onclick="executeImport()" style="display:none">✅ 確認匯入</button>
     </div>
   </div>
 </div>
@@ -2236,7 +2294,7 @@ function bookingToCalEvent(b) {
   console.groupEnd();
 
   return {
-    summary: '📖 ' + b.time + (b.endTime ? '~' + b.endTime : '') + ' ' + tn + ' / ' + b.course + ' ' + (b.mode || '實體'),
+    summary: '📖 ' + (b.mode || '實體') + ' - ' + tn + ' / ' + b.course,
     description: desc,
     start: { dateTime: startDT, timeZone: 'Asia/Taipei' },
     end:   { dateTime: endDT,   timeZone: 'Asia/Taipei' },
@@ -3490,6 +3548,386 @@ function downloadCSV(csv, filename) {
   document.body.removeChild(a);
   setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
 }
+
+// ── CSV 匯入 ──
+var importPendingRows = []; // 待匯入的解析結果
+
+var STATUS_MAP = { '已確認':'confirmed', '待確認':'pending', '已完成':'completed', '已取消':'cancelled' };
+var MODE_MAP   = { '實體':'實體', '線上':'線上', '線上+實體':'線上+實體' };
+
+function openImportModal() {
+  importPendingRows = [];
+  document.getElementById('importPreview').style.display = 'none';
+  document.getElementById('importConfirmBtn').style.display = 'none';
+  document.getElementById('importFileInput').value = '';
+  var dz = document.getElementById('importDropZone');
+  dz.style.borderColor = '';
+  dz.style.background = '';
+  openModal('importOverlay');
+}
+
+function onImportFileDrop(e) {
+  e.preventDefault();
+  var dz = document.getElementById('importDropZone');
+  dz.style.borderColor = '';
+  dz.style.background = '';
+  var file = e.dataTransfer.files[0];
+  if (file) readImportFile(file);
+}
+
+function onImportFileSelect(e) {
+  var file = e.target.files[0];
+  if (file) readImportFile(file);
+}
+
+function readImportFile(file) {
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    toast('請選擇 .csv 格式的檔案', '⚠️'); return;
+  }
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var text = e.target.result;
+      // 亂碼偵測：若含大量替換字元（UTF-8 讀 Big5 的特徵），提示用戶
+      var garbledCount = (text.match(/\ufffd/g) || []).length;
+      if (garbledCount > 3) {
+        toast('⚠️ 檔案可能為非 UTF-8 編碼（Excel 存檔請選「CSV UTF-8」格式）', '⚠️');
+        // 嘗試繼續，讓用戶看到預覽決定是否匯入
+      }
+      parseImportCSV(text);
+    } catch(err) {
+      toast('檔案讀取失敗：' + err.message, '⚠️');
+    }
+  };
+  // 嘗試 UTF-8（含 BOM），再嘗試 Latin1（讓瀏覽器自行處理 Big5）
+  reader.readAsText(file, 'UTF-8');
+}
+
+function parseImportCSV(text) {
+  // 移除 BOM
+  text = text.replace(/^\uFEFF/, '');
+  var lines = text.split(/\r?\n/).filter(function(l){ return l.trim(); });
+  if (lines.length < 2) { toast('CSV 至少需要標題列和一筆資料', '⚠️'); return; }
+
+  // 解析 CSV 行（處理引號包覆）
+  function parseLine(line) {
+    var cols = [], cur = '', inQ = false;
+    for (var i = 0; i < line.length; i++) {
+      var c = line[i];
+      if (c === '"') {
+        if (inQ && line[i+1] === '"') { cur += '"'; i++; }
+        else inQ = !inQ;
+      } else if (c === ',' && !inQ) {
+        cols.push(cur.trim()); cur = '';
+      } else cur += c;
+    }
+    cols.push(cur.trim());
+    return cols;
+  }
+
+  var headers = parseLine(lines[0]).map(function(h){ return h.replace(/"/g,'').trim(); });
+  // 欄位對應（依名稱找，相容不同匯出格式）
+  function col(row, names) {
+    for (var i = 0; i < names.length; i++) {
+      var idx = headers.indexOf(names[i]);
+      if (idx >= 0 && row[idx] !== undefined) return row[idx].replace(/"/g,'').trim();
+    }
+    return '';
+  }
+
+  var valid = [], skipped = 0, duplicate = 0;
+
+  for (var r = 1; r < lines.length; r++) {
+    var row = parseLine(lines[r]);
+    var name    = col(row, ['客戶姓名','姓名','學生']);
+    var teacher = col(row, ['老師','授課老師']);
+    var course  = col(row, ['課程','課程名稱']);
+    var date    = col(row, ['日期']);
+    var time    = col(row, ['時間','上課時間']);
+    var phone   = col(row, ['電話','聯絡電話']);
+    var mode    = col(row, ['上課方式']) || '實體';
+    var statusZh = col(row, ['狀態']);
+    var syllabus = col(row, ['課綱重點','課綱']);
+    var meetingUrl = col(row, ['線上連結','連結']);
+    var notes   = col(row, ['備註','客戶需求']);
+    var durationStr = col(row, ['時長']);
+
+    // 必要欄位驗證
+    if (!name || !date || !time) { skipped++; continue; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { skipped++; continue; }
+    if (!/^\d{2}:\d{2}$/.test(time)) { skipped++; continue; }
+
+    // 重複判斷：老師名稱 + 日期 + 時間
+    var isDuplicate = bookings.some(function(b) {
+      var t = teachers.find(function(x){ return x.id === b.teacherId; });
+      return (t ? t.name : '') === teacher && b.date === date && b.time === time;
+    });
+    if (isDuplicate) { duplicate++; continue; }
+
+    // 解析時長（分鐘）
+    var duration = 60;
+    if (durationStr) {
+      var hm = durationStr.match(/(\d+)小時(?:(\d+)分)?/);
+      var mo = durationStr.match(/^(\d+)分/);
+      if (hm) duration = parseInt(hm[1])*60 + (parseInt(hm[2])||0);
+      else if (mo) duration = parseInt(mo[1]);
+      else if (/^\d+$/.test(durationStr)) duration = parseInt(durationStr);
+    }
+    // 計算 endTime
+    var sh = parseInt(time.split(':')[0], 10);
+    var sm = parseInt(time.split(':')[1], 10);
+    var em = sh*60 + sm + duration;
+    var endTime = String(Math.floor(em/60)%24).padStart(2,'0') + ':' + String(em%60).padStart(2,'0');
+
+    var status = STATUS_MAP[statusZh] || 'confirmed';
+
+    valid.push({ name, phone, teacher, course, date, time, endTime, duration,
+      mode: MODE_MAP[mode] || '實體', status, syllabus, meetingUrl, notes });
+  }
+
+  importPendingRows = valid;
+
+  // 顯示預覽
+  var preview = document.getElementById('importPreview');
+  var content = document.getElementById('importPreviewContent');
+  var confirmBtn = document.getElementById('importConfirmBtn');
+
+  var newTeachers = [];
+  valid.forEach(function(row) {
+    if (row.teacher && !teachers.find(function(t){ return t.name === row.teacher; })) {
+      if (newTeachers.indexOf(row.teacher) < 0) newTeachers.push(row.teacher);
+    }
+  });
+
+  var html = '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">'
+    + '<div style="background:#e6f4ec;border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:700;color:#2d7a4a;font-family:Cormorant Garamond,serif">' + valid.length + '</div><div style="font-size:11px;color:var(--text-sub)">可匯入</div></div>'
+    + '<div style="background:#fef3e2;border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:700;color:#8b5e1a;font-family:Cormorant Garamond,serif">' + duplicate + '</div><div style="font-size:11px;color:var(--text-sub)">重複跳過</div></div>'
+    + '<div style="background:var(--cream);border-radius:8px;padding:10px;text-align:center"><div style="font-size:20px;font-weight:700;color:var(--text-sub);font-family:Cormorant Garamond,serif">' + skipped + '</div><div style="font-size:11px;color:var(--text-sub)">格式錯誤</div></div>'
+    + '</div>';
+
+  if (newTeachers.length > 0) {
+    html += '<div style="background:#e8f0f5;border-radius:8px;padding:10px 12px;font-size:12px;color:var(--sky);margin-bottom:10px">'
+      + '🆕 以下老師將自動建立：<strong>' + newTeachers.join('、') + '</strong></div>';
+  }
+
+  if (valid.length > 0) {
+    html += '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:6px">前 5 筆預覽</div>'
+      + '<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">'
+      + '<table style="width:100%;font-size:12px;border-collapse:collapse">'
+      + '<thead><tr style="background:var(--cream)"><th style="padding:6px 8px;text-align:left;font-weight:500;color:var(--text-sub)">姓名</th><th style="padding:6px 8px;text-align:left;font-weight:500;color:var(--text-sub)">老師</th><th style="padding:6px 8px;text-align:left;font-weight:500;color:var(--text-sub)">課程</th><th style="padding:6px 8px;text-align:left;font-weight:500;color:var(--text-sub)">日期 / 時間</th></tr></thead><tbody>';
+    valid.slice(0, 5).forEach(function(row) {
+      html += '<tr style="border-top:1px solid var(--border)">'
+        + '<td style="padding:6px 8px">' + row.name + '</td>'
+        + '<td style="padding:6px 8px">' + (row.teacher || '—') + '</td>'
+        + '<td style="padding:6px 8px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + row.course + '</td>'
+        + '<td style="padding:6px 8px;font-family:DM Mono,monospace;font-size:11px">' + row.date + ' ' + row.time + '</td>'
+        + '</tr>';
+    });
+    if (valid.length > 5) html += '<tr><td colspan="4" style="padding:6px 8px;color:var(--text-sub);font-size:11px;text-align:center">…還有 ' + (valid.length-5) + ' 筆</td></tr>';
+    html += '</tbody></table></div>';
+  }
+
+  content.innerHTML = html;
+  preview.style.display = 'block';
+  confirmBtn.style.display = valid.length > 0 ? 'flex' : 'none';
+
+  if (valid.length === 0) toast('無可匯入的資料（全部重複或格式錯誤）', '⚠️');
+}
+
+async function executeImport() {
+  if (importPendingRows.length === 0) return;
+  var btn = document.getElementById('importConfirmBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '匯入中…'; }
+
+  var MAX_IMPORT_RETRY = 3;
+  var BATCH_LIMIT = 499;
+  var basePath = cachedBasePath || getUserPath();
+  var COLORS = ['#b8894a','#3d6b8c','#6b7c6e','#8b4a3c','#5a6e8c','#7c6b8a','#4a7c6b','#8c7a4a'];
+
+  // 準備所有物件（只做一次）
+  var teacherNameMap = {};
+  teachers.forEach(function(t){ teacherNameMap[t.name] = t.id; });
+
+  var newTeacherNames = [];
+  importPendingRows.forEach(function(row) {
+    if (row.teacher && !teacherNameMap[row.teacher] && newTeacherNames.indexOf(row.teacher) < 0)
+      newTeacherNames.push(row.teacher);
+  });
+
+  var newTeacherObjs = newTeacherNames.map(function(name, i) {
+    var tId = 't' + Date.now() + '_' + i;
+    var color = COLORS[(teachers.length + i) % COLORS.length];
+    teacherNameMap[name] = tId;
+    return { id: tId, name: name, subject: '', color: color };
+  });
+
+  var ts = Date.now();
+  var newBookingObjs = importPendingRows.map(function(row, j) {
+    return {
+      id: 'b' + ts + '_' + j,
+      name: row.name, phone: row.phone,
+      teacherId: teacherNameMap[row.teacher] || '',
+      course: row.course,
+      date: row.date, time: row.time, endTime: row.endTime, duration: row.duration,
+      mode: row.mode, status: row.status,
+      syllabus: row.syllabus, meetingUrl: row.meetingUrl, notes: row.notes
+    };
+  });
+
+  var expectedCount = newBookingObjs.length;
+
+  // allWrites：老師在前，預約在後（teachers 先建立）
+  var allWrites = [];
+  newTeacherObjs.forEach(function(t) { allWrites.push({ col: 'teachers', id: t.id, data: t }); });
+  newBookingObjs.forEach(function(b) { allWrites.push({ col: 'bookings', id: b.id, data: b }); });
+
+  // 記錄已成功寫入的 ID（跨 retry 保留）
+  var succeededIds = new Set();
+  var attempt = 0;
+  var lastError = null;
+
+  while (attempt < MAX_IMPORT_RETRY) {
+    attempt++;
+    if (btn) btn.textContent = attempt > 1 ? ('重試中… (' + attempt + '/' + MAX_IMPORT_RETRY + ')') : '匯入中…';
+
+    try {
+      // 只寫入尚未成功的部分
+      var pendingWrites = allWrites.filter(function(w) { return !succeededIds.has(w.id); });
+
+      if (pendingWrites.length === 0) break; // 全部完成
+
+      // 分批 batch commit，逐批追蹤成功
+      for (var start = 0; start < pendingWrites.length; start += BATCH_LIMIT) {
+        var chunk = pendingWrites.slice(start, start + BATCH_LIMIT);
+        var batch = db.batch();
+        chunk.forEach(function(w) {
+          batch.set(db.collection(basePath + '/' + w.col).doc(w.id), w.data);
+        });
+        await batch.commit();
+        // 這批 commit 成功，記錄所有 ID
+        chunk.forEach(function(w) { succeededIds.add(w.id); });
+      }
+
+      lastError = null;
+      break; // 全部 commit 成功，跳出 retry
+
+    } catch(e) {
+      lastError = e;
+      console.warn('[Import] 第 ' + attempt + ' 次嘗試失敗:', e.message,
+        '| 已成功:', succeededIds.size, '筆，待重試:', allWrites.length - succeededIds.size, '筆');
+
+      if (attempt < MAX_IMPORT_RETRY) {
+        var delay = Math.pow(2, attempt) * 1000; // 2s, 4s
+        if (btn) btn.textContent = '等待重試… (' + delay/1000 + 's)';
+        await new Promise(function(r){ setTimeout(r, delay); });
+      }
+    }
+  }
+
+  // ── 驗證階段：從 Firestore 讀回確認書寫筆數 ──
+  try {
+    if (btn) btn.textContent = '驗證中…';
+
+    var verifyResults = await Promise.all(
+      newBookingObjs.map(function(b) {
+        return db.collection(basePath + '/bookings').doc(b.id).get();
+      })
+    );
+    var actualWritten = verifyResults.filter(function(s){ return s.exists; }).length;
+    var missingCount  = expectedCount - actualWritten;
+
+    // 更新本地陣列（只加已確認寫入的）
+    var writtenBookingIds = new Set(
+      verifyResults.filter(function(s){ return s.exists; }).map(function(s){ return s.id; })
+    );
+    newTeacherObjs.forEach(function(t){ teachers.push(t); });
+    newBookingObjs.filter(function(b){ return writtenBookingIds.has(b.id); })
+      .forEach(function(b){ bookings.push(b); });
+    renderTeachers(); renderTeacherFilters(); renderAll();
+
+    if (missingCount > 0) {
+      closeModal('importOverlay');
+
+      // 找出哪幾筆沒有成功寫入
+      var failedRows = newBookingObjs.filter(function(b) {
+        return !writtenBookingIds.has(b.id);
+      });
+
+      // 建立失敗清單 HTML（最多顯示 20 筆，避免太長）
+      var failedListHtml = '<div style="margin-top:10px">'
+        + '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:6px">未匯入的預約（共 ' + failedRows.length + ' 筆）</div>'
+        + '<div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;max-height:200px;overflow-y:auto">'
+        + '<table style="width:100%;font-size:12px;border-collapse:collapse">'
+        + '<thead><tr style="background:var(--cream);position:sticky;top:0">'
+        + '<th style="padding:5px 8px;text-align:left;font-weight:500;color:var(--text-sub);white-space:nowrap">姓名</th>'
+        + '<th style="padding:5px 8px;text-align:left;font-weight:500;color:var(--text-sub);white-space:nowrap">老師</th>'
+        + '<th style="padding:5px 8px;text-align:left;font-weight:500;color:var(--text-sub);white-space:nowrap">課程</th>'
+        + '<th style="padding:5px 8px;text-align:left;font-weight:500;color:var(--text-sub);white-space:nowrap">日期 / 時間</th>'
+        + '</tr></thead><tbody>';
+
+      failedRows.slice(0, 20).forEach(function(b, i) {
+        var t = teachers.find(function(x){ return x.id === b.teacherId; });
+        failedListHtml += '<tr style="border-top:1px solid var(--border);background:' + (i%2===0?'#fff':'var(--cream)') + '">'
+          + '<td style="padding:5px 8px">' + (b.name || '—') + '</td>'
+          + '<td style="padding:5px 8px">' + (t ? t.name : b.teacherId ? '—' : '無老師') + '</td>'
+          + '<td style="padding:5px 8px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + b.course + '">' + (b.course || '—') + '</td>'
+          + '<td style="padding:5px 8px;font-family:DM Mono,monospace;font-size:11px;white-space:nowrap">' + b.date + ' ' + b.time + '</td>'
+          + '</tr>';
+      });
+      if (failedRows.length > 20) {
+        failedListHtml += '<tr><td colspan="4" style="padding:5px 8px;color:var(--text-sub);font-size:11px;text-align:center">…還有 ' + (failedRows.length - 20) + ' 筆未顯示</td></tr>';
+      }
+      failedListHtml += '</tbody></table></div></div>';
+
+      showConfirm(
+        '⚠️ 部分資料未匯入成功',
+        '已重試 ' + attempt + ' 次。<br>'
+          + '預期 <strong>' + expectedCount + '</strong> 筆，'
+          + '成功 <strong style="color:#2d7a4a">' + actualWritten + '</strong> 筆，'
+          + '失敗 <strong style="color:var(--rust)">' + missingCount + '</strong> 筆。<br>'
+          + (lastError ? '<span style="font-size:11px;color:var(--text-sub)">錯誤：' + lastError.message + '</span><br>' : '')
+          + failedListHtml
+          + '<div style="margin-top:8px;font-size:11px;color:var(--text-sub)">已成功匯入的資料不受影響，可將上方失敗的資料整理成 CSV 後重新匯入。</div>',
+        function() {},
+        '知道了'
+      );
+    } else {
+      closeModal('importOverlay');
+      var retryNote = attempt > 1 ? ('（重試 ' + (attempt-1) + ' 次後成功）') : '（已驗證）';
+      toast('匯入完成 ' + retryNote + '：' + actualWritten + ' 筆預約'
+        + (newTeacherObjs.length > 0 ? '，新增 ' + newTeacherObjs.length + ' 位老師' : ''), '✅');
+    }
+
+  } catch(verifyErr) {
+    // 驗證本身出錯：根據 succeededIds 判斷哪些已寫入，避免不一致
+    console.error('[Import] 驗證失敗:', verifyErr);
+    newTeacherObjs.forEach(function(t){ teachers.push(t); });
+    // 只 push 確認在 succeededIds 裡的 booking（已 commit 的 batch）
+    newBookingObjs.filter(function(b){ return succeededIds.has(b.id); })
+      .forEach(function(b){ bookings.push(b); });
+    var confirmedCount = newBookingObjs.filter(function(b){ return succeededIds.has(b.id); }).length;
+    renderTeachers(); renderTeacherFilters(); renderAll();
+    closeModal('importOverlay');
+    toast('匯入完成，驗證步驟失敗（已確認寫入 ' + confirmedCount + '/' + expectedCount + ' 筆）', '⚠️');
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = '✅ 確認匯入'; }
+}
+function downloadImportTemplate() {
+  var header = '客戶姓名,電話,老師,課程,上課方式,日期,時間,時長,狀態,課綱重點,線上連結,備註';
+  var rows = [
+    '"王小明","0912-345-678","李燕秋","高中數學","實體","2026-05-01","10:00","60分鐘","已確認","二次函數","","需多練習應用題"',
+    '"陳雅婷","0922-111-222","李燕秋","英文口說","線上","2026-05-02","14:00","90分鐘","待確認","日常對話","https://meet.google.com/xxx",""',
+  ];
+  var csv = '\uFEFF' + header + '\n' + rows.join('\n');
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+  a.download = '預約匯入範本.csv';
+  a.click();
+  toast('範本已下載', '📄');
+}
+
+// ── CSV 匯入 END ──
 
 function exportCSV() {
   const list = getFiltered().sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
