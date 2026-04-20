@@ -807,28 +807,28 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
       <div style="background:#fef3e2;border-radius:8px;padding:14px;font-size:12px;color:#8b5e1a;line-height:1.7;margin-bottom:12px">
         ⚠️ 匯入會覆蓋群組內所有老師與預約資料，請先確認已備份現有資料。
       </div>
-      <div id="syncDropZone"
+      <div id="importOverlayDropZone"
         style="border:2px dashed var(--border);border-radius:10px;padding:28px 20px;text-align:center;cursor:pointer;transition:all 0.2s;margin-bottom:8px"
-        onclick="document.getElementById('syncFileInput').click()"
+        onclick="document.getElementById('importOverlayFileInput').click()"
         ondragover="event.preventDefault();this.style.borderColor='var(--gold)';this.style.background='var(--gold-pale)'"
         ondragleave="this.style.borderColor='var(--border)';this.style.background=''"
-        ondrop="onSyncFileDrop(event)">
+        ondrop="onImportOverlayFileDrop(event)">
         <div style="font-size:28px;margin-bottom:8px">📂</div>
         <div style="font-size:13px;color:var(--ink);font-weight:600">點擊選擇或拖曳 .csv 設定檔</div>
         <div style="font-size:11px;color:var(--text-sub);margin-top:4px">僅支援本系統匯出的 CSV 檔案</div>
       </div>
-      <input type="file" id="syncFileInput" accept=".csv" style="display:none" onchange="onSyncFileSelect(event)">
+      <input type="file" id="importOverlayFileInput" accept=".csv" style="display:none" onchange="onImportOverlayFileSelect(event)">
       <!-- 下載範本 -->
       <div style="text-align:center;margin-bottom:12px">
         <button onclick="downloadImportTemplate()" style="background:transparent;border:none;color:var(--sky);font-size:12px;cursor:pointer;font-family:inherit;text-decoration:underline;padding:0">
           📄 下載匯入範本 (.csv)
         </button>
       </div>
-      <div id="syncPreview" style="display:none;background:var(--cream);border-radius:8px;padding:14px;margin-bottom:12px">
+      <div id="importOverlayPreview" style="display:none;background:var(--cream);border-radius:8px;padding:14px;margin-bottom:12px">
         <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:8px">檔案預覽</div>
-        <div id="syncPreviewContent" style="font-size:13px;color:var(--ink)"></div>
+        <div id="importOverlayPreviewContent" style="font-size:13px;color:var(--ink)"></div>
       </div>
-      <button id="syncImportBtn" class="btn btn-gold" onclick="importConfig()" style="width:100%;justify-content:center;display:none;align-items:center;gap:8px">
+      <button id="importOverlayConfirmBtn" class="btn btn-gold" onclick="executeImport()" style="width:100%;justify-content:center;display:none;align-items:center;gap:8px">
         ✅ 確認匯入（覆蓋現有資料）
       </button>
     </div>
@@ -3563,21 +3563,24 @@ var MODE_MAP   = { '實體':'實體', '線上':'線上', '線上+實體':'線上
 
 function openImportModal() {
   importPendingRows = [];
-  document.getElementById('importPreview').style.display = 'none';
-  document.getElementById('importConfirmBtn').style.display = 'none';
-  document.getElementById('importFileInput').value = '';
-  var dz = document.getElementById('importDropZone');
-  dz.style.borderColor = '';
-  dz.style.background = '';
+  document.getElementById('importOverlayPreview').style.display = 'none';
+  document.getElementById('importOverlayConfirmBtn').style.display = 'none';
+  document.getElementById('importOverlayFileInput').value = '';
+  var dz = document.getElementById('importOverlayDropZone');
+  if (dz) { dz.style.borderColor = ''; dz.style.background = ''; }
   openModal('importOverlay');
 }
 
-function onImportFileDrop(e) {
+function onImportOverlayFileDrop(e) {
   e.preventDefault();
-  var dz = document.getElementById('importDropZone');
-  dz.style.borderColor = '';
-  dz.style.background = '';
+  var dz = document.getElementById('importOverlayDropZone');
+  if (dz) { dz.style.borderColor = ''; dz.style.background = ''; }
   var file = e.dataTransfer.files[0];
+  if (file) readImportFile(file);
+}
+
+function onImportOverlayFileSelect(e) {
+  var file = e.target.files[0];
   if (file) readImportFile(file);
 }
 
