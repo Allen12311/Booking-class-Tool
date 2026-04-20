@@ -800,7 +800,7 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
 <div class="overlay" id="importOverlay">
   <div class="modal" style="width:480px;max-width:95vw">
     <div class="modal-header">
-      <div><div class="modal-title">📥 匯入設定檔</div><div class="modal-sub">Import Config</div></div>
+      <div><div class="modal-title">📥 匯入設定檔</div><div class="modal-sub">Import CSV</div></div>
       <button class="close-btn" onclick="closeModal('importOverlay')">✕</button>
     </div>
     <div class="modal-body">
@@ -808,16 +808,22 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
         ⚠️ 匯入會覆蓋群組內所有老師與預約資料，請先確認已備份現有資料。
       </div>
       <div id="syncDropZone"
-        style="border:2px dashed var(--border);border-radius:10px;padding:28px 20px;text-align:center;cursor:pointer;transition:all 0.2s;margin-bottom:12px"
+        style="border:2px dashed var(--border);border-radius:10px;padding:28px 20px;text-align:center;cursor:pointer;transition:all 0.2s;margin-bottom:8px"
         onclick="document.getElementById('syncFileInput').click()"
         ondragover="event.preventDefault();this.style.borderColor='var(--gold)';this.style.background='var(--gold-pale)'"
         ondragleave="this.style.borderColor='var(--border)';this.style.background=''"
         ondrop="onSyncFileDrop(event)">
         <div style="font-size:28px;margin-bottom:8px">📂</div>
-        <div style="font-size:13px;color:var(--ink);font-weight:600">點擊選擇或拖曳 .json 設定檔</div>
-        <div style="font-size:11px;color:var(--text-sub);margin-top:4px">僅支援本系統匯出的 config 檔案</div>
+        <div style="font-size:13px;color:var(--ink);font-weight:600">點擊選擇或拖曳 .csv 設定檔</div>
+        <div style="font-size:11px;color:var(--text-sub);margin-top:4px">僅支援本系統匯出的 CSV 檔案</div>
       </div>
-      <input type="file" id="syncFileInput" accept=".json" style="display:none" onchange="onSyncFileSelect(event)">
+      <input type="file" id="syncFileInput" accept=".csv" style="display:none" onchange="onSyncFileSelect(event)">
+      <!-- 下載範本 -->
+      <div style="text-align:center;margin-bottom:12px">
+        <button onclick="downloadImportTemplate()" style="background:transparent;border:none;color:var(--sky);font-size:12px;cursor:pointer;font-family:inherit;text-decoration:underline;padding:0">
+          📄 下載匯入範本 (.csv)
+        </button>
+      </div>
       <div id="syncPreview" style="display:none;background:var(--cream);border-radius:8px;padding:14px;margin-bottom:12px">
         <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:8px">檔案預覽</div>
         <div id="syncPreviewContent" style="font-size:13px;color:var(--ink)"></div>
