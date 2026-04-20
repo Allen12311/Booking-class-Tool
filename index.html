@@ -3645,6 +3645,11 @@ function parseImportCSV(text) {
   }
 
   var valid = [], skipped = 0, duplicate = 0;
+  var skipLog = [];
+
+  console.group('[Import] parseImportCSV 開始');
+  console.log('總行數（含標題）:', lines.length, '| 資料行:', lines.length - 1);
+  console.log('欄位標題:', headers);
 
   for (var r = 1; r < lines.length; r++) {
     var row = parseLine(lines[r]);
@@ -3662,28 +3667,50 @@ function parseImportCSV(text) {
     var meetingUrl = col(row, ['線上連結','連結']);
     var notes      = col(row, ['備註','客戶需求']);
     var durationStr = col(row, ['時長']);
+    var rowLabel   = '行' + (r + 1) + '（' + (name || '?') + '）';
 
     // 必要欄位驗證
-    if (!name || !date || !time) { skipped++; continue; }
+    if (!name || !date || !time) {
+      var missing = [];
+      if (!name) missing.push('客戶姓名');
+      if (!date) missing.push('日期');
+      if (!time) missing.push('開始時間');
+      console.warn('[Import]', rowLabel, '跳過 - 必要欄位缺失:', missing.join('、'));
+      skipLog.push({ row: r+1, name: name||'—', reason: '必要欄位缺失：' + missing.join('、') });
+      skipped++; continue;
+    }
 
     // 日期格式自動轉換：YYYY/M/D 或 YYYY/MM/DD → YYYY-MM-DD
+    var dateOrig = date;
     if (/^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(date)) {
       var dp = date.split(/[\/\-]/);
       date = dp[0] + '-' + String(dp[1]).padStart(2,'0') + '-' + String(dp[2]).padStart(2,'0');
+      if (dateOrig !== date) console.log('[Import]', rowLabel, '日期轉換:', dateOrig, '→', date);
     }
     // 時間格式自動補零：H:MM → HH:MM
-    if (/^\d{1}:\d{2}$/.test(time)) time = '0' + time;
-    if (endTimeCsv && /^\d{1}:\d{2}$/.test(endTimeCsv)) endTimeCsv = '0' + endTimeCsv;
+    if (/^\d{1}:\d{2}$/.test(time)) { var to = time; time = '0' + time; console.log('[Import]', rowLabel, '時間補零:', to, '→', time); }
+    if (endTimeCsv && /^\d{1}:\d{2}$/.test(endTimeCsv)) { var eo = endTimeCsv; endTimeCsv = '0' + endTimeCsv; console.log('[Import]', rowLabel, '結束時間補零:', eo, '→', endTimeCsv); }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { skipped++; continue; }
-    if (!/^\d{2}:\d{2}$/.test(time)) { skipped++; continue; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      console.warn('[Import]', rowLabel, '跳過 - 日期格式無效:', date);
+      skipLog.push({ row: r+1, name: name, reason: '日期格式無效：' + date });
+      skipped++; continue;
+    }
+    if (!/^\d{2}:\d{2}$/.test(time)) {
+      console.warn('[Import]', rowLabel, '跳過 - 開始時間格式無效:', time);
+      skipLog.push({ row: r+1, name: name, reason: '開始時間格式無效：' + time });
+      skipped++; continue;
+    }
 
     // 重複判斷：老師名稱 + 日期 + 時間
     var isDuplicate = bookings.some(function(b) {
       var t = teachers.find(function(x){ return x.id === b.teacherId; });
       return (t ? t.name : '') === teacher && b.date === date && b.time === time;
     });
-    if (isDuplicate) { duplicate++; continue; }
+    if (isDuplicate) {
+      console.log('[Import]', rowLabel, '重複跳過（老師:', teacher, '| 日期:', date, '| 時間:', time, '）');
+      duplicate++; continue;
+    }
 
     // 解析時長（分鐘）
     var sh = parseInt(time.split(':')[0], 10);
@@ -3699,7 +3726,6 @@ function parseImportCSV(text) {
       var diff = (eh*60 + em2) - (sh*60 + sm);
       if (diff > 0) duration = diff;
     } else if (durationStr) {
-      // 沒有結束時間，用時長反推
       var hm = durationStr.match(/(\d+)小時(?:(\d+)分)?/);
       var mo = durationStr.match(/^(\d+)分/);
       if (hm) duration = parseInt(hm[1])*60 + (parseInt(hm[2])||0);
@@ -3708,17 +3734,31 @@ function parseImportCSV(text) {
       var em = sh*60 + sm + duration;
       endTime = String(Math.floor(em/60)%24).padStart(2,'0') + ':' + String(em%60).padStart(2,'0');
     } else {
-      // 兩者都沒有，預設 60 分鐘
       var em0 = sh*60 + sm + 60;
       endTime = String(Math.floor(em0/60)%24).padStart(2,'0') + ':' + String(em0%60).padStart(2,'0');
     }
 
     var status = STATUS_MAP[statusZh] || 'confirmed';
+    if (!STATUS_MAP[statusZh]) console.warn('[Import]', rowLabel, '狀態值未知：「' + statusZh + '」→ 預設已確認');
 
-    valid.push({ name, phone, teacher, course, assistant: assistant || '',
-      date, time, endTime, duration,
-      mode: MODE_MAP[mode] || '實體', status, syllabus, meetingUrl, notes });
+    console.log('[Import]', rowLabel, '✅ |',
+      '老師:', teacher||'（空）', '| 課程:', course,
+      '| 日期:', date, '| 時間:', time, '~', endTime,
+      '| 時長:', duration, '分 | 狀態:', status,
+      '| 助教:', assistant||'—', '| 方式:', mode);
+
+    valid.push({ name: name, phone: phone, teacher: teacher, course: course, assistant: assistant || '',
+      date: date, time: time, endTime: endTime, duration: duration,
+      mode: MODE_MAP[mode] || '實體', status: status, syllabus: syllabus, meetingUrl: meetingUrl, notes: notes });
   }
+
+  console.log('[Import] 解析完成 → 有效:', valid.length, '| 重複:', duplicate, '| 跳過:', skipped);
+  if (skipLog.length > 0) {
+    console.group('[Import] 跳過明細');
+    skipLog.forEach(function(s){ console.warn('  行' + s.row, s.name, '→', s.reason); });
+    console.groupEnd();
+  }
+  console.groupEnd();
 
   importPendingRows = valid;
 
