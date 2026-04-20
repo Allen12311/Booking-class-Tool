@@ -3762,10 +3762,10 @@ function parseImportCSV(text) {
 
   importPendingRows = valid;
 
-  // 顯示預覽
-  var preview = document.getElementById('importPreview');
-  var content = document.getElementById('importPreviewContent');
-  var confirmBtn = document.getElementById('importConfirmBtn');
+  // 顯示預覽（同時更新兩個 modal 的元件：importOverlay 和新 CSV modal）
+  var previewIds   = ['importOverlayPreview',   'importPreview'];
+  var contentIds   = ['importOverlayPreviewContent', 'importPreviewContent'];
+  var confirmIds   = ['importOverlayConfirmBtn', 'importConfirmBtn'];
 
   var newTeachers = [];
   valid.forEach(function(row) {
@@ -3802,17 +3802,30 @@ function parseImportCSV(text) {
     html += '</tbody></table></div>';
   }
 
-  content.innerHTML = html;
-  preview.style.display = 'block';
-  confirmBtn.style.display = valid.length > 0 ? 'flex' : 'none';
+  // 同時更新兩個 modal
+  previewIds.forEach(function(pid, i) {
+    var previewEl = document.getElementById(pid);
+    var contentEl = document.getElementById(contentIds[i]);
+    var confirmEl = document.getElementById(confirmIds[i]);
+    if (previewEl) { previewEl.style.display = 'block'; }
+    if (contentEl) { contentEl.innerHTML = html; }
+    if (confirmEl) { confirmEl.style.display = valid.length > 0 ? 'flex' : 'none'; }
+  });
 
   if (valid.length === 0) toast('無可匯入的資料（全部重複或格式錯誤）', '⚠️');
 }
 
 async function executeImport() {
   if (importPendingRows.length === 0) return;
-  var btn = document.getElementById('importConfirmBtn');
-  if (btn) { btn.disabled = true; btn.textContent = '匯入中…'; }
+  // 同時處理兩個 modal 的確認按鈕
+  var btn1 = document.getElementById('importOverlayConfirmBtn');
+  var btn2 = document.getElementById('importConfirmBtn');
+  function setBtnState(disabled, text) {
+    [btn1, btn2].forEach(function(b) {
+      if (b) { b.disabled = disabled; if (text) b.textContent = text; }
+    });
+  }
+  setBtnState(true, '匯入中…');
 
   var MAX_IMPORT_RETRY = 3;
   var BATCH_LIMIT = 499;
@@ -3863,7 +3876,7 @@ async function executeImport() {
 
   while (attempt < MAX_IMPORT_RETRY) {
     attempt++;
-    if (btn) btn.textContent = attempt > 1 ? ('重試中… (' + attempt + '/' + MAX_IMPORT_RETRY + ')') : '匯入中…';
+    setBtnState(true, attempt > 1 ? ('重試中… (' + attempt + '/' + MAX_IMPORT_RETRY + ')') : '匯入中…');
 
     try {
       // 只寫入尚未成功的部分
@@ -3893,7 +3906,7 @@ async function executeImport() {
 
       if (attempt < MAX_IMPORT_RETRY) {
         var delay = Math.pow(2, attempt) * 1000; // 2s, 4s
-        if (btn) btn.textContent = '等待重試… (' + delay/1000 + 's)';
+        setBtnState(true, '等待重試… (' + delay/1000 + 's)');
         await new Promise(function(r){ setTimeout(r, delay); });
       }
     }
@@ -3901,7 +3914,7 @@ async function executeImport() {
 
   // ── 驗證階段：從 Firestore 讀回確認書寫筆數 ──
   try {
-    if (btn) btn.textContent = '驗證中…';
+    setBtnState(true, '驗證中…');
 
     var verifyResults = await Promise.all(
       newBookingObjs.map(function(b) {
@@ -3986,7 +3999,7 @@ async function executeImport() {
     toast('匯入完成，驗證步驟失敗（已確認寫入 ' + confirmedCount + '/' + expectedCount + ' 筆）', '⚠️');
   }
 
-  if (btn) { btn.disabled = false; btn.textContent = '✅ 確認匯入'; }
+  setBtnState(false, '✅ 確認匯入');
 }
 function downloadImportTemplate() {
   var header = '客戶姓名,電話,老師,課程,助教,上課方式,日期,開始時間,結束時間,時長,狀態,課綱重點,線上連結,備註';
