@@ -1625,7 +1625,7 @@ function startDataListeners() {
   unsubscribeBookings = db.collection(base + '/bookings').onSnapshot(function(snap) {
     bookings = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
     bookingsReady = true;
-    renderTeachers();
+    renderTeacherUI();
     if (teachersReady) renderAll();
   }, function(err) {
     console.error('[Firestore] bookings 監聽失敗:', err.code, err.message);
@@ -2469,6 +2469,8 @@ function gcalDeleteEvent(booking) {
           headers: { 'Authorization': 'Bearer ' + gcalAccessToken } }; }
       );
       if (resp.status !== 204 && !resp.ok) throw new Error('HTTP ' + resp.status);
+      gcalSet(GCAL_LAST_SYNC_KEY, new Date().toISOString());
+      updateGcalWidget();
       toast('Google 日曆事件已刪除 🗑️', '✅');
     } catch(e) {
       console.error('[GCal] 刪除失敗:', e);
@@ -2787,7 +2789,7 @@ async function saveBooking() {
     const idx = bookings.findIndex(x => x.id === obj.id);
     if (idx >= 0) bookings[idx] = obj;
   }
-  renderTeachers();
+  renderTeacherUI();
   renderAll();
   toast(isNew ? '已新增預約：'+name+' × '+course : '預約已更新', isNew ? '📌' : '✏️');
   closeModal('bookingOverlay');
@@ -2803,7 +2805,7 @@ async function saveBooking() {
     }
   } catch(e) {
     bookings = prevBookings;
-    renderTeachers();
+    renderTeacherUI();
     renderAll();
     toast('儲存失敗，已回復：' + e.message, '⚠️');
   }
@@ -2866,7 +2868,7 @@ function deleteBooking(id) {
       // 樂觀更新：先移除本地資料
       var prevBookings = bookings.slice();
       bookings = bookings.filter(function(x){ return x.id !== id; });
-      renderTeachers();
+      renderTeacherUI();
       renderAll();
       closeModal('detailOverlay');
       toast('預約已刪除', '🗑️');
@@ -2876,7 +2878,7 @@ function deleteBooking(id) {
         gcalDeleteEvent(b);
       } catch(e) {
         bookings = prevBookings;
-        renderTeachers();
+        renderTeacherUI();
         renderAll();
         toast('刪除失敗，已回復：' + e.message, '⚠️');
       }
@@ -3058,7 +3060,7 @@ function deleteSelectedBookings() {
       bookings = bookings.filter(function(b){ return !selectedBookingIds.has(b.id); });
       selectedBookingIds.clear();
       multiSelectMode = false;
-      renderTeachers();
+      renderTeacherUI();
       renderAll();
       toast('已刪除 ' + count + ' 筆預約', '🗑️');
       try {
@@ -3067,7 +3069,7 @@ function deleteSelectedBookings() {
         toDelete.forEach(function(b){ gcalDeleteEvent(b); });
       } catch(e) {
         bookings = prevBookings;
-        renderTeachers();
+        renderTeacherUI();
         renderAll();
         toast('刪除失敗，已回復：' + e.message, '⚠️');
       }
