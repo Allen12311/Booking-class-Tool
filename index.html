@@ -2114,25 +2114,36 @@ function gcalSilentRefreshOrPrompt(email) {
   // 優先嘗試靜默刷新（不彈視窗），失敗才顯示提示
   var prompted = false;
   var retryCount = 0;
-  var maxRetry = 12; // 最多 6 秒等 SDK 載入
+  var maxRetry = 20; // 最多 10 秒等 SDK 載入（每 500ms 一次）
 
-  // 15 秒 timeout → 靜默失敗，顯示提示視窗
+  // 20 秒 timeout → 靜默失敗，顯示提示視窗
   var promptTimer = setTimeout(function() {
     if (!gcalAccessToken && !prompted) {
       prompted = true;
-      console.warn('[GCal] 靜默續期逾時（15s），顯示過期提示');
+      console.warn('[GCal] 靜默續期逾時（20s），顯示過期提示');
       showGcalExpiredModal(email);
     }
-  }, 15000);
+  }, 20000);
 
   function onTokenSuccess() {
-    // token 取得成功，清除 timer，不顯示提示
+    // token 取得成功，清除 timer，更新 widget
     clearTimeout(promptTimer);
+    console.log('[GCal] ✅ gcalSilentRefreshOrPrompt 靜默刷新成功');
+    updateGcalWidget();
+    // 若同步帳號尚未設定，補設（登入流程中可能還沒設）
+    if (currentUser && !getGcalSyncEmail()) {
+      gcalSet(GCAL_SYNC_KEY, currentUser.email);
+    }
   }
 
   function tryRefresh() {
     if (retryCount > maxRetry) {
-      console.warn('[GCal] gcalSilentRefreshOrPrompt：SDK 等待超時');
+      console.warn('[GCal] gcalSilentRefreshOrPrompt：SDK 等待超時（10s）');
+      if (!prompted) {
+        prompted = true;
+        clearTimeout(promptTimer);
+        showGcalExpiredModal(email);
+      }
       return;
     }
     if (!window.google || !window.google.accounts) {
@@ -2143,14 +2154,13 @@ function gcalSilentRefreshOrPrompt(email) {
     if (!gcalTokenClient) initGcalClient();
     if (!gcalTokenClient) { retryCount++; setTimeout(tryRefresh, 500); return; }
 
-    // 把 onTokenSuccess 注入到 token callback 的 pendingAction
-    // 不覆蓋已有的 pendingAction，而是串接
+    // 串接到 pendingAction，不覆蓋已有的
     var prev = gcalPendingAction;
     gcalPendingAction = function() {
       onTokenSuccess();
       if (prev) prev();
     };
-    console.log('[GCal] gcalSilentRefreshOrPrompt：送出靜默 requestAccessToken');
+    console.log('[GCal] gcalSilentRefreshOrPrompt：送出靜默 requestAccessToken（retry:', retryCount, '）');
     gcalTokenClient.requestAccessToken({ prompt: '' });
   }
   tryRefresh();
@@ -3964,19 +3974,16 @@ async function executeImport() {
     var actualWritten = verifyResults.filter(function(s){ return s.exists; }).length;
     var missingCount  = expectedCount - actualWritten;
 
-    // 更新本地陣列（只加已確認寫入的）
-    var writtenBookingIds = new Set(
-      verifyResults.filter(function(s){ return s.exists; }).map(function(s){ return s.id; })
-    );
-    newTeacherObjs.forEach(function(t){ teachers.push(t); });
-    newBookingObjs.filter(function(b){ return writtenBookingIds.has(b.id); })
-      .forEach(function(b){ bookings.push(b); });
-    renderTeachers(); renderTeacherFilters(); renderAll();
+    // 本地陣列由 onSnapshot 自動更新，不需要手動 push
+    // 只處理 UI：關閉 modal + 顯示結果
 
     if (missingCount > 0) {
       closeModal('importOverlay');
 
-      // 找出哪幾筆沒有成功寫入
+      // 找出哪幾筆沒有成功寫入（用 writtenBookingIds 識別）
+      var writtenBookingIds = new Set(
+        verifyResults.filter(function(s){ return s.exists; }).map(function(s){ return s.id; })
+      );
       var failedRows = newBookingObjs.filter(function(b) {
         return !writtenBookingIds.has(b.id);
       });
@@ -4027,16 +4034,10 @@ async function executeImport() {
     }
 
   } catch(verifyErr) {
-    // 驗證本身出錯：根據 succeededIds 判斷哪些已寫入，避免不一致
+    // 驗證本身出錯：onSnapshot 會自動補上已寫入的資料，不需手動 push
     console.error('[Import] 驗證失敗:', verifyErr);
-    newTeacherObjs.forEach(function(t){ teachers.push(t); });
-    // 只 push 確認在 succeededIds 裡的 booking（已 commit 的 batch）
-    newBookingObjs.filter(function(b){ return succeededIds.has(b.id); })
-      .forEach(function(b){ bookings.push(b); });
-    var confirmedCount = newBookingObjs.filter(function(b){ return succeededIds.has(b.id); }).length;
-    renderTeachers(); renderTeacherFilters(); renderAll();
     closeModal('importOverlay');
-    toast('匯入完成，驗證步驟失敗（已確認寫入 ' + confirmedCount + '/' + expectedCount + ' 筆）', '⚠️');
+    toast('匯入完成，驗證步驟失敗（資料已寫入，頁面將自動更新）', '⚠️');
   }
 
   setBtnState(false, '✅ 確認匯入');
