@@ -2536,6 +2536,30 @@ function updateGcalWidget() {
 }
 
 // ── 雙向同步：從 Google 日曆拉取最新狀態 ──
+// 匯入後自動推送指定預約到 Google 日曆（背景執行）
+function gcalPushImported(importedBookings) {
+  if (!isGcalSyncAccount()) return;
+  // 從 bookings 陣列取最新版本（onSnapshot 已更新），過濾非取消
+  var targets = importedBookings.filter(function(b) {
+    return b.status !== 'cancelled';
+  });
+  if (targets.length === 0) return;
+
+  console.log('[GCal] 匯入後自動推送', targets.length, '筆');
+  ensureGcalToken(async function() {
+    var BATCH_SIZE = 5;
+    var pushed = 0;
+    for (var i = 0; i < targets.length; i += BATCH_SIZE) {
+      var batch = targets.slice(i, i + BATCH_SIZE);
+      batch.forEach(function(b) { gcalCreateEvent(b); pushed++; });
+      if (i + BATCH_SIZE < targets.length) {
+        await new Promise(function(r){ setTimeout(r, 500); });
+      }
+    }
+    toast('已自動推送 ' + pushed + ' 筆匯入預約至 Google 日曆 📅', '✅');
+  });
+}
+
 async function gcalPullFromCalendar() {
   if (!isGcalSyncAccount()) { toast('請先設定同步帳號', '⚠️'); return; }
   var pullBtn = document.getElementById('gcalPullBtn');
@@ -3973,13 +3997,19 @@ async function executeImport() {
       var retryNote = attempt > 1 ? ('（重試 ' + (attempt-1) + ' 次後成功）') : '（已驗證）';
       toast('匯入完成 ' + retryNote + '：' + actualWritten + ' 筆預約'
         + (newTeacherObjs.length > 0 ? '，新增 ' + newTeacherObjs.length + ' 位老師' : ''), '✅');
+      // 匯入成功後自動推送到 Google 日曆（背景執行，延遲等 onSnapshot 更新完畢）
+      if (isGcalSyncAccount()) {
+        setTimeout(function() { gcalPushImported(newBookingObjs); }, 1500);
+      }
     }
 
   } catch(verifyErr) {
-    // 驗證本身出錯：onSnapshot 會自動補上已寫入的資料，不需手動 push
     console.error('[Import] 驗證失敗:', verifyErr);
     closeModal('importOverlay');
     toast('匯入完成，驗證步驟失敗（資料已寫入，頁面將自動更新）', '⚠️');
+    if (isGcalSyncAccount()) {
+      setTimeout(function() { gcalPushImported(newBookingObjs); }, 1500);
+    }
   }
 
   setBtnState(false, '✅ 確認匯入');
