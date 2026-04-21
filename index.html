@@ -853,7 +853,8 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
       </div>
       <div id="gcalAuthSection" style="margin-top:4px;display:flex;flex-direction:column;gap:8px">
         <button class="btn btn-gold btn-sm" onclick="gcalAuthorize()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">🔑 重新授權 Google 日曆</button>
-        <button class="btn btn-sm" onclick="gcalPullFromCalendar()" id="gcalPullBtn" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:7px;font-family:inherit">🔄 從 Google 日曆同步</button>
+        <button class="btn btn-sm" onclick="gcalPullFromCalendar()" id="gcalPullBtn" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:7px;font-family:inherit">🔄 推送未同步預約</button>
+        <button class="btn btn-sm" onclick="gcalPushUnsynced()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:transparent;color:var(--sky);border-radius:4px;cursor:pointer;padding:7px;font-family:inherit">📤 推送所有未同步預約</button>
         <div id="gcalAuthStatus" style="font-size:11px;color:var(--text-sub);margin-top:8px;text-align:center"></div>
       </div>
     </div>
@@ -2515,139 +2516,67 @@ function updateGcalWidget() {
 }
 
 // ── 雙向同步：從 Google 日曆拉取最新狀態 ──
+// 推送所有無 gcalEventId 的預約（匯入後或解除綁定後使用）
+function gcalPushUnsynced() {
+  if (!isGcalSyncAccount()) { toast('請先設定同步帳號', '⚠️'); return; }
+  var unsynced = bookings.filter(function(b) {
+    return !b.gcalEventId && b.status !== 'cancelled';
+  });
+  if (unsynced.length === 0) {
+    toast('所有預約已與 Google 日曆同步 ✅', 'ℹ️'); return;
+  }
+  ensureGcalToken(function() {
+    unsynced.forEach(function(b) { gcalCreateEvent(b); });
+    toast('正在推送 ' + unsynced.length + ' 筆未同步預約…', '📤');
+  });
+}
+
 async function gcalPullFromCalendar() {
   if (!isGcalSyncAccount()) { toast('請先設定同步帳號', '⚠️'); return; }
   var pullBtn = document.getElementById('gcalPullBtn');
-  if (pullBtn) { pullBtn.textContent = '🔄 同步中…'; pullBtn.disabled = true; }
+  if (pullBtn) { pullBtn.textContent = '🔄 推送中…'; pullBtn.disabled = true; }
 
   function resetBtn() {
-    if (pullBtn) { pullBtn.textContent = '🔄 從 Google 日曆同步'; pullBtn.disabled = false; }
+    if (pullBtn) { pullBtn.textContent = '🔄 推送未同步預約'; pullBtn.disabled = false; }
   }
 
   ensureGcalToken(async function() {
     try {
-      var timeMin = new Date(Date.now() - 30 * 86400000).toISOString();
-      var timeMax = new Date(Date.now() + 90 * 86400000).toISOString();
-      var url = 'https://www.googleapis.com/calendar/v3/calendars/primary/events'
-        + '?timeMin=' + encodeURIComponent(timeMin)
-        + '&timeMax=' + encodeURIComponent(timeMax)
-        + '&maxResults=500&singleEvents=true&showDeleted=true';
-
-      var resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + gcalAccessToken } });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      var data = await resp.json();
-      var allEvents = data.items || [];
-
-      // 建立事件索引
-      var deletedEventIds = new Set();
-      var activeEventMap  = {};
-      var bookingIdMap    = {};
-      allEvents.forEach(function(ev) {
-        if (ev.status === 'cancelled') { deletedEventIds.add(ev.id); return; }
-        activeEventMap[ev.id] = ev;
-        var bid = ev.extendedProperties && ev.extendedProperties.private
-          && ev.extendedProperties.private.bookingId;
-        if (bid) bookingIdMap[bid] = ev;
+      // 找出所有未同步（沒有 gcalEventId）且非取消的預約
+      var needPush = bookings.filter(function(b) {
+        return !b.gcalEventId && b.status !== 'cancelled';
       });
 
-      console.log('[GCal] Pull: 現存', Object.keys(activeEventMap).length, '| 已刪除', deletedEventIds.size);
+      console.log('[GCal] 推送未同步預約：共', needPush.length, '筆');
 
-      // 找出需要刪除和更新的
-      var bookingsToDelete = [];
-      var bookingsToUpdate = [];
-      var dbPromises = [];
-      var basePath = cachedBasePath || getUserPath();
-
-      bookings.forEach(function(b) {
-        if (!b.gcalEventId) return;
-        if (deletedEventIds.has(b.gcalEventId)) {
-          bookingsToDelete.push(b); return;
-        }
-        var ev = activeEventMap[b.gcalEventId];
-        if (!ev) {
-          // 用 bookingId 二次確認（eventId 可能換了）
-          if (bookingIdMap[b.id]) {
-            b.gcalEventId = bookingIdMap[b.id].id;
-            ev = bookingIdMap[b.id];
-            dbPromises.push(db.collection(basePath + '/bookings').doc(b.id)
-              .update({ gcalEventId: ev.id }).catch(function(){}));
-          } else { return; }
-        }
-        var changes = parseGcalEventChanges(b, ev);
-        if (changes) bookingsToUpdate.push({ booking: b, changes: changes });
-      });
-
-      // 無任何變更
-      if (bookingsToDelete.length === 0 && bookingsToUpdate.length === 0) {
-        toast('Google 日曆無新變更', 'ℹ️');
+      if (needPush.length === 0) {
+        toast('所有預約已完成同步，無需推送', 'ℹ️');
         resetBtn();
         openGcalSettings();
         return;
       }
 
-      // 執行內容更新（不需確認）
-      var updatedCount = 0;
-      bookingsToUpdate.forEach(function(item) {
-        Object.assign(item.booking, item.changes);
-        dbPromises.push(db.collection(basePath + '/bookings').doc(item.booking.id)
-          .update(item.changes).catch(function(){}));
-        updatedCount++;
-      });
-      await Promise.all(dbPromises);
-      if (updatedCount > 0) { renderTeachers(); renderAll(); }
-
-      // 執行刪除（需確認）
-      if (bookingsToDelete.length > 0) {
-        var names = bookingsToDelete.map(function(b){ return b.name + '（' + b.course + '）'; }).join('、');
-        showConfirm(
-          'Google 日曆已刪除 ' + bookingsToDelete.length + ' 筆預約',
-          '以下預約在 Google 日曆上已被刪除，是否同步刪除系統資料？<br><br>'
-            + '<strong>' + names + '</strong><br>'
-            + '<span style="font-size:12px;color:var(--text-sub)">此操作無法復原。</span>',
-          async function() {
-            // 確認刪除
-            var prevBookings = bookings.slice();
-            var idsToDelete = bookingsToDelete.map(function(b){ return b.id; });
-            bookings = bookings.filter(function(b){ return idsToDelete.indexOf(b.id) < 0; });
-            renderTeachers(); renderAll();
-            try {
-              await Promise.all(idsToDelete.map(function(id){ return dbDeleteBooking(id); }));
-              var parts = [];
-              if (updatedCount > 0) parts.push('更新 ' + updatedCount + ' 筆');
-              parts.push('刪除 ' + bookingsToDelete.length + ' 筆');
-              gcalSet(GCAL_LAST_SYNC_KEY, new Date().toISOString());
-              updateGcalWidget();
-              toast('從 Google 日曆同步完成：' + parts.join('、'), '✅');
-            } catch(e) {
-              bookings = prevBookings; renderTeachers(); renderAll();
-              toast('刪除失敗：' + e.message, '⚠️');
-            }
-            resetBtn(); openGcalSettings();
-          },
-          '確認刪除 ' + bookingsToDelete.length + ' 筆',
-          function() {
-            // 取消刪除：只顯示更新結果
-            if (updatedCount > 0) {
-              gcalSet(GCAL_LAST_SYNC_KEY, new Date().toISOString());
-              updateGcalWidget();
-              toast('從 Google 日曆同步完成：更新 ' + updatedCount + ' 筆（已跳過刪除）', '✅');
-            } else {
-              toast('已取消同步刪除', 'ℹ️');
-            }
-            resetBtn(); openGcalSettings();
-          }
-        );
-      } else {
-        // 只有更新，沒有刪除
-        gcalSet(GCAL_LAST_SYNC_KEY, new Date().toISOString());
-        updateGcalWidget();
-        toast('從 Google 日曆同步完成：更新 ' + updatedCount + ' 筆', '✅');
-        resetBtn(); openGcalSettings();
+      // 逐一推送（gcalCreateEvent 內部有 retry 機制）
+      var pushed = 0;
+      for (var i = 0; i < needPush.length; i++) {
+        if (pullBtn) pullBtn.textContent = '🔄 推送中… (' + (i + 1) + '/' + needPush.length + ')';
+        gcalCreateEvent(needPush[i]);
+        pushed++;
+        // 每 5 筆稍微延遲，避免 API rate limit
+        if (i > 0 && i % 5 === 0) {
+          await new Promise(function(r){ setTimeout(r, 300); });
+        }
       }
 
+      gcalSet(GCAL_LAST_SYNC_KEY, new Date().toISOString());
+      updateGcalWidget();
+      toast('已推送 ' + pushed + ' 筆未同步預約至 Google 日曆 📅', '✅');
+      resetBtn();
+      openGcalSettings();
+
     } catch(e) {
-      console.error('[GCal] 拉取失敗:', e);
-      toast('從 Google 日曆同步失敗：' + e.message, '⚠️');
+      console.error('[GCal] 推送失敗:', e);
+      toast('推送失敗：' + e.message, '⚠️');
       resetBtn();
     }
   });
@@ -2748,7 +2677,8 @@ function openGcalSettings() {
     var authSection2 = document.getElementById('gcalAuthSection');
     if (authSection2) {
       authSection2.innerHTML = '<button class="btn btn-gold btn-sm" onclick="gcalAuthorize()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">🔑 重新授權 Google 日曆</button>'
-        + '<button class="btn btn-sm" onclick="gcalPullFromCalendar()" id="gcalPullBtn" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:7px;font-family:inherit">🔄 從 Google 日曆同步</button>'
+        + '<button class="btn btn-sm" onclick="gcalPullFromCalendar()" id="gcalPullBtn" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:7px;font-family:inherit">🔄 推送未同步預約</button>'
+        + '<button class="btn btn-sm" onclick="gcalPushUnsynced()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px;border:1px solid var(--border);background:transparent;color:var(--sky);border-radius:4px;cursor:pointer;padding:7px;font-family:inherit">📤 推送所有未同步預約</button>'
         + '<div id="gcalAuthStatus" style="font-size:11px;color:var(--text-sub);margin-top:8px;text-align:center"></div>';
     }
   } else {
