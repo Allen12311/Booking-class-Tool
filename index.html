@@ -1664,28 +1664,36 @@ async function dbDeleteBooking(id) {
 async function dbBatchImport(importTeachers, importBookings) {
   if (!db || !currentUser || !currentGroupId) return;
   var base = getUserPath();
-  var batch = db.batch();
+  var MAX_BATCH_OPS = 450;
+  var writes = [];
   var tSnap = await db.collection(base + '/teachers').get();
-  tSnap.docs.forEach(function(d) { batch.delete(d.ref); });
+  tSnap.docs.forEach(function(d) { writes.push({ type: 'delete', ref: d.ref }); });
   var bSnap = await db.collection(base + '/bookings').get();
-  bSnap.docs.forEach(function(d) { batch.delete(d.ref); });
+  bSnap.docs.forEach(function(d) { writes.push({ type: 'delete', ref: d.ref }); });
   importTeachers.forEach(function(t) {
     var data = Object.assign({}, t); var id = data.id; delete data.id;
-    batch.set(db.collection(base + '/teachers').doc(id), data);
+    writes.push({ type: 'set', ref: db.collection(base + '/teachers').doc(id), data: data });
   });
   importBookings.forEach(function(b) {
     var data = Object.assign({}, b); var id = data.id; delete data.id;
-    batch.set(db.collection(base + '/bookings').doc(id), data);
+    writes.push({ type: 'set', ref: db.collection(base + '/bookings').doc(id), data: data });
   });
-  await batch.commit();
+  for (var i = 0; i < writes.length; i += MAX_BATCH_OPS) {
+    var batch = db.batch();
+    writes.slice(i, i + MAX_BATCH_OPS).forEach(function(w) {
+      if (w.type === 'delete') batch.delete(w.ref);
+      else batch.set(w.ref, w.data);
+    });
+    await batch.commit();
+  }
 }
 
 const COLORS = ['#b8894a','#FF8F8F','#FFB067','#FAD678','#9ED38E','#84C1FF','#B9B9FF','#D194C2','#B766AD','#8C5A6B'];
 let selectedColor = COLORS[0];
 let teachers = [];
 let bookings = [];
-const now = new Date();
-let calYear = now.getFullYear(), calMonth = now.getMonth();
+const initNow = new Date();
+let calYear = initNow.getFullYear(), calMonth = initNow.getMonth();
 let currentView = 'table';
 
 // 跨瀏覽器安全取值（替代 optional chaining ?.）
@@ -1695,6 +1703,46 @@ function localDateStr(d) {
   return dt.getFullYear() + '-'
     + String(dt.getMonth() + 1).padStart(2, '0') + '-'
     + String(dt.getDate()).padStart(2, '0');
+}
+
+function escapeHtml(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(v) {
+  return escapeHtml(v);
+}
+
+function escapeJsSingle(v) {
+  return String(v == null ? '' : v)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/[\u2028\u2029]/g, '');
+}
+
+function safeUrl(v) {
+  var s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  try {
+    var u = new URL(s, window.location.origin);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    return u.href;
+  } catch (e) {
+    return '';
+  }
+}
+
+function safeCsvValue(v) {
+  var s = String(v == null ? '' : v);
+  if (/^[=+\-@]/.test(s)) s = "'" + s;
+  return s;
 }
 
 function safeGet(obj, key, fallback) {
@@ -1709,7 +1757,12 @@ function fmtDuration(mins) {
 function toast(msg, icon='✓') {
   const el = document.createElement('div');
   el.className = 'toast';
-  el.innerHTML = `<span>${icon}</span><span>${msg}</span>`;
+  var iconEl = document.createElement('span');
+  iconEl.textContent = icon;
+  var msgEl = document.createElement('span');
+  msgEl.textContent = msg;
+  el.appendChild(iconEl);
+  el.appendChild(msgEl);
   document.getElementById('toastContainer').appendChild(el);
   setTimeout(() => el.remove(), 3200);
 }
@@ -1754,11 +1807,12 @@ function switchViewBtn(v) {
 function renderTeachers() {
   const html = teachers.map(t => {
     const c = bookings.filter(b=>b.teacherId===t.id).length;
-    return `<div class="teacher-chip" onclick="filterByTeacher('${t.id}')">
+    const tid = escapeJsSingle(t.id);
+    return `<div class="teacher-chip" onclick="filterByTeacher('${tid}')">
       <div class="teacher-dot" style="background:${t.color}"></div>
-      <span class="teacher-name">${t.name}${t.subject?` <span style="font-size:10px;opacity:.5">· ${t.subject}</span>`:''}</span>
+      <span class="teacher-name">${escapeHtml(t.name)}${t.subject?` <span style="font-size:10px;opacity:.5">· ${escapeHtml(t.subject)}</span>`:''}</span>
       <span class="teacher-count">${c}</span>
-      <span class="teacher-del" onclick="deleteTeacher('${t.id}',event)" title="刪除老師"
+      <span class="teacher-del" onclick="deleteTeacher('${tid}',event)" title="刪除老師"
         style="width:20px;height:20px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;cursor:pointer;color:rgba(255,255,255,.6)">✕</span>
     </div>`;
   }).join('') || '<div style="color:rgba(255,255,255,.3);font-size:12px;padding:8px 12px">尚無老師</div>';
@@ -1768,18 +1822,19 @@ function renderTeachers() {
   if (drawerList) {
     drawerList.innerHTML = teachers.map(t => {
       const c = bookings.filter(b => b.teacherId === t.id).length;
-      return `<div class="teacher-chip" onclick="filterByTeacher('${t.id}');closeDrawer()">
+      const tid = escapeJsSingle(t.id);
+      return `<div class="teacher-chip" onclick="filterByTeacher('${tid}');closeDrawer()">
         <div class="teacher-dot" style="background:${t.color}"></div>
-        <span class="teacher-name">${t.name}</span>
+        <span class="teacher-name">${escapeHtml(t.name)}</span>
         <span class="teacher-count">${c}</span>
-        <span class="teacher-del" onclick="deleteTeacher('${t.id}',event)" title="刪除老師"
+        <span class="teacher-del" onclick="deleteTeacher('${tid}',event)" title="刪除老師"
           style="width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;cursor:pointer;color:rgba(255,255,255,.5);background:rgba(139,74,60,0.2)">✕</span>
       </div>`;
     }).join('') || '<div style="color:rgba(255,255,255,.3);font-size:12px;padding:8px 12px">尚無老師</div>';
   }
 }
 function renderTeacherFilters() {
-  const opts = teachers.map(t=>`<option value="${t.id}">${t.name}${t.subject?' ('+t.subject+')':''}</option>`).join('');
+  const opts = teachers.map(t=>`<option value="${escapeAttr(t.id)}">${escapeHtml(t.name)}${t.subject?' ('+escapeHtml(t.subject)+')':''}</option>`).join('');
   document.getElementById('filterTeacher').innerHTML = '<option value="">所有老師</option>'+opts;
   document.getElementById('fTeacher').innerHTML = '<option value="">請選擇老師</option>'+opts;
 }
@@ -2855,23 +2910,25 @@ function openDetail(id) {
   const t=teachers.find(x=>x.id===b.teacherId);
   const sm={confirmed:'已確認',pending:'待確認',completed:'已完成',cancelled:'已取消'};
   const sc={confirmed:'tag-confirmed',pending:'tag-pending',completed:'tag-completed',cancelled:'tag-cancelled'};
+  const safeMeetingHref = safeUrl(b.meetingUrl || '');
+  const safeMeetingText = escapeHtml(b.meetingUrl || '');
   document.getElementById('detailTitle').textContent=b.name;
   document.getElementById('detailSub').textContent=b.course;
   document.getElementById('detailBody').innerHTML=`
     <div class="detail-grid">
-      <div class="detail-section"><div class="detail-label">授課老師</div><div class="detail-value" style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;border-radius:50%;background:${safeGet(t,'color','#999')}"></div>${safeGet(t,'name','未知')}${t && t.subject?` <span style="font-size:11px;color:var(--text-sub)">(${t.subject})</span>`:''}</div></div>
+      <div class="detail-section"><div class="detail-label">授課老師</div><div class="detail-value" style="display:flex;align-items:center;gap:6px"><div style="width:10px;height:10px;border-radius:50%;background:${safeGet(t,'color','#999')}"></div>${escapeHtml(safeGet(t,'name','未知'))}${t && t.subject?` <span style="font-size:11px;color:var(--text-sub)">(${escapeHtml(t.subject)})</span>`:''}</div></div>
       <div class="detail-section"><div class="detail-label">預約狀態</div><div class="detail-value"><span class="tag ${sc[b.status]}">${sm[b.status]}</span></div></div>
-      <div class="detail-section"><div class="detail-label">上課日期</div><div class="detail-value">${b.date}</div></div>
-      <div class="detail-section"><div class="detail-label">上課時間</div><div class="detail-value">${b.time} ~ ${b.endTime||''} <span style="color:var(--text-sub);font-size:12px">（${fmtDuration(b.duration)}）</span></div></div>
-      <div class="detail-section"><div class="detail-label">聯絡電話</div><div class="detail-value">${b.phone||'—'}</div></div>
-      <div class="detail-section"><div class="detail-label">課程名稱</div><div class="detail-value">${b.course}</div></div>
+      <div class="detail-section"><div class="detail-label">上課日期</div><div class="detail-value">${escapeHtml(b.date)}</div></div>
+      <div class="detail-section"><div class="detail-label">上課時間</div><div class="detail-value">${escapeHtml(b.time)} ~ ${escapeHtml(b.endTime||'')} <span style="color:var(--text-sub);font-size:12px">（${fmtDuration(b.duration)}）</span></div></div>
+      <div class="detail-section"><div class="detail-label">聯絡電話</div><div class="detail-value">${escapeHtml(b.phone||'—')}</div></div>
+      <div class="detail-section"><div class="detail-label">課程名稱</div><div class="detail-value">${escapeHtml(b.course)}</div></div>
       <div class="detail-section"><div class="detail-label">上課方式</div><div class="detail-value">${b.mode==='線上'?'💻 線上':b.mode==='線上+實體'?'🏫💻 線上+實體':'🏫 實體'}</div></div>
-      ${b.assistant?`<div class="detail-section"><div class="detail-label">助教</div><div class="detail-value">${b.assistant}</div></div>`:''}
+      ${b.assistant?`<div class="detail-section"><div class="detail-label">助教</div><div class="detail-value">${escapeHtml(b.assistant)}</div></div>`:''}
     </div>
     <div class="divider"></div>
-    <div class="detail-section"><div class="detail-label">課綱重點</div><div class="detail-value">${b.syllabus||'—'}</div></div>
-    <div class="detail-section"><div class="detail-label">線上課程連結</div><div class="detail-value">${b.meetingUrl ? `<a href="${b.meetingUrl}" target="_blank" rel="noopener" style="color:var(--sky);word-break:break-all;text-decoration:underline">${b.meetingUrl}</a>` : '—'}</div></div>
-    <div class="detail-section"><div class="detail-label">客戶需求 ／ 備註</div><div class="detail-value">${b.notes||'—'}</div></div>`;
+    <div class="detail-section"><div class="detail-label">課綱重點</div><div class="detail-value">${escapeHtml(b.syllabus||'—')}</div></div>
+    <div class="detail-section"><div class="detail-label">線上課程連結</div><div class="detail-value">${safeMeetingHref ? `<a href="${escapeAttr(safeMeetingHref)}" target="_blank" rel="noopener" style="color:var(--sky);word-break:break-all;text-decoration:underline">${safeMeetingText}</a>` : '—'}</div></div>
+    <div class="detail-section"><div class="detail-label">客戶需求 ／ 備註</div><div class="detail-value">${escapeHtml(b.notes||'—')}</div></div>`;
   document.getElementById('detailEditBtn').onclick=()=>openEditBooking(id);
   document.getElementById('detailDeleteBtn').onclick=()=>deleteBooking(id);
   openModal('detailOverlay');
@@ -3126,6 +3183,16 @@ function renderTable() {
   // Desktop table rows
   const rows=list.map(b=>{
     const t=teachers.find(x=>x.id===b.teacherId);
+    const safeId = escapeJsSingle(b.id);
+    const safeName = escapeHtml(b.name);
+    const safePhone = escapeHtml(b.phone || '');
+    const safeTeacherName = escapeHtml(safeGet(t,'name','—'));
+    const safeCourse = escapeHtml(b.course);
+    const safeAssistant = escapeHtml(b.assistant || '');
+    const safeDate = escapeHtml(b.date);
+    const safeTime = escapeHtml(b.time);
+    const safeEndTime = escapeHtml(b.endTime || '');
+    const safeNoteTitle = escapeAttr((b.notes || '').slice(0,40));
     const modeTag = b.mode==='線上'
       ? `<span style="font-size:10px;background:#e8f0f5;color:var(--sky);padding:1px 6px;border-radius:3px;margin-left:4px">💻線上</span>`
       : b.mode==='線上+實體'
@@ -3133,22 +3200,22 @@ function renderTable() {
       : `<span style="font-size:10px;background:#f0ede8;color:var(--text-sub);padding:1px 6px;border-radius:3px;margin-left:4px">🏫實體</span>`;
     const isSelected = selectedBookingIds.has(b.id);
     const checkCell = multiSelectMode
-      ? `<td onclick="toggleSelectBooking('${b.id}',event)" style="cursor:pointer;width:36px">
+      ? `<td onclick="toggleSelectBooking('${safeId}',event)" style="cursor:pointer;width:36px">
            <div style="width:18px;height:18px;border:2px solid ${isSelected?'var(--gold)':'var(--border)'};border-radius:4px;background:${isSelected?'var(--gold)':'transparent'};display:flex;align-items:center;justify-content:center;margin:auto">
              ${isSelected?'<span style="color:#fff;font-size:11px;line-height:1">✓</span>':''}
            </div>
          </td>`
       : '';
-    return `<tr onclick="${multiSelectMode?`toggleSelectBooking('${b.id}',event)`:`openDetail('${b.id}')`}" style="cursor:pointer;${isSelected?'background:var(--gold-pale)':''}">
+    return `<tr onclick="${multiSelectMode?`toggleSelectBooking('${safeId}',event)`:`openDetail('${safeId}')`}" style="cursor:pointer;${isSelected?'background:var(--gold-pale)':''}">
       ${checkCell}
-      <td><strong>${b.name}</strong>${b.phone?`<br><span style="font-size:11px;color:var(--text-sub)">${b.phone}</span>`:''}</td>
-      <td><div class="teacher-badge"><div class="teacher-badge-dot" style="background:${safeGet(t,'color','#999')}"></div>${safeGet(t,'name','—')}</div></td>
-      <td>${b.course}${modeTag}${b.assistant?`<br><span style="font-size:11px;color:var(--text-sub)">助教：${b.assistant}</span>`:''}<br><span style="font-size:11px;color:var(--text-sub)">${fmtDuration(b.duration)}</span>${b.meetingUrl?`<span style="font-size:10px;color:var(--sky);margin-left:4px">🔗</span>`:''}${b.notes?`<span title="${b.notes.slice(0,40)}" style="font-size:10px;color:var(--text-sub);margin-left:4px">📝</span>`:''}</td>
-      <td>${b.date}<br><span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text-sub)">${b.time}${b.endTime?' ~ '+b.endTime:''}</span></td>
+      <td><strong>${safeName}</strong>${b.phone?`<br><span style="font-size:11px;color:var(--text-sub)">${safePhone}</span>`:''}</td>
+      <td><div class="teacher-badge"><div class="teacher-badge-dot" style="background:${safeGet(t,'color','#999')}"></div>${safeTeacherName}</div></td>
+      <td>${safeCourse}${modeTag}${b.assistant?`<br><span style="font-size:11px;color:var(--text-sub)">助教：${safeAssistant}</span>`:''}<br><span style="font-size:11px;color:var(--text-sub)">${fmtDuration(b.duration)}</span>${b.meetingUrl?`<span style="font-size:10px;color:var(--sky);margin-left:4px">🔗</span>`:''}${b.notes?`<span title="${safeNoteTitle}" style="font-size:10px;color:var(--text-sub);margin-left:4px">📝</span>`:''}</td>
+      <td>${safeDate}<br><span style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text-sub)">${safeTime}${b.endTime?' ~ '+safeEndTime:''}</span></td>
       <td><span class="tag ${sc[b.status]}">${sm[b.status]}</span></td>
       <td><div class="action-btns" onclick="event.stopPropagation()">
-        ${multiSelectMode?'':`<div class="icon-btn" onclick="openEditBooking('${b.id}')" title="編輯">✏️</div>`}
-        <div class="icon-btn" onclick="deleteBooking('${b.id}')" title="刪除">🗑️</div>
+        ${multiSelectMode?'':`<div class="icon-btn" onclick="openEditBooking('${safeId}')" title="編輯">✏️</div>`}
+        <div class="icon-btn" onclick="deleteBooking('${safeId}')" title="刪除">🗑️</div>
       </div></td>
     </tr>`;
   }).join('');
@@ -3156,26 +3223,36 @@ function renderTable() {
   // Mobile cards with multi-select
   const cards = list.map(b => {
     const t = teachers.find(x=>x.id===b.teacherId);
+    const safeId = escapeJsSingle(b.id);
+    const safeName = escapeHtml(b.name);
+    const safePhone = escapeHtml(b.phone || '');
+    const safeCourse = escapeHtml(b.course);
+    const safeAssistant = escapeHtml(b.assistant || '');
+    const safeDate = escapeHtml(b.date);
+    const safeTime = escapeHtml(b.time);
+    const safeEndTime = escapeHtml(b.endTime || '');
+    const safeTeacherName = escapeHtml(safeGet(t,'name','—'));
+    const safeNotes = escapeHtml((b.notes || '').slice(0,60));
     const isSelected = selectedBookingIds.has(b.id);
-    return `<div class="booking-card" onclick="${multiSelectMode?`toggleSelectBooking('${b.id}',event)`:`openDetail('${b.id}')`}" style="${isSelected?'background:var(--gold-pale);border-color:var(--gold)':''}">
+    return `<div class="booking-card" onclick="${multiSelectMode?`toggleSelectBooking('${safeId}',event)`:`openDetail('${safeId}')`}" style="${isSelected?'background:var(--gold-pale);border-color:var(--gold)':''}">
       <div class="booking-card-accent" style="background:${safeGet(t,'color','#ccc')}"></div>
       ${multiSelectMode?`<div style="position:absolute;top:12px;right:12px;width:20px;height:20px;border:2px solid ${isSelected?'var(--gold)':'var(--border)'};border-radius:4px;background:${isSelected?'var(--gold)':'#fff'};display:flex;align-items:center;justify-content:center">${isSelected?'<span style="color:#fff;font-size:12px">✓</span>':''}</div>`:''}
       <div style="padding-left:8px">
         <div class="booking-card-top">
           <div>
-            <div class="booking-card-name">${b.name}${b.phone?`<span style="font-size:11px;color:var(--text-sub);font-weight:400;margin-left:6px">${b.phone}</span>`:''}</div>
-            <div class="booking-card-course">${b.course}${b.assistant?' · 助教：'+b.assistant:''} · ${fmtDuration(b.duration)}</div>
+            <div class="booking-card-name">${safeName}${b.phone?`<span style="font-size:11px;color:var(--text-sub);font-weight:400;margin-left:6px">${safePhone}</span>`:''}</div>
+            <div class="booking-card-course">${safeCourse}${b.assistant?' · 助教：'+safeAssistant:''} · ${fmtDuration(b.duration)}</div>
           </div>
           <span class="tag ${sc[b.status]}" style="flex-shrink:0;${multiSelectMode?'margin-right:28px':''}">${sm[b.status]}</span>
         </div>
         <div class="booking-card-meta">
-          <div class="booking-card-meta-item"><span>📅</span>${b.date}</div>
-          <div class="booking-card-meta-item"><span>🕐</span>${b.time}${b.endTime?' ~ '+b.endTime:''}</div>
-          <div class="booking-card-meta-item"><div style="width:7px;height:7px;border-radius:50%;background:${safeGet(t,'color','#ccc')}"></div>${safeGet(t,'name','—')}</div>
+          <div class="booking-card-meta-item"><span>📅</span>${safeDate}</div>
+          <div class="booking-card-meta-item"><span>🕐</span>${safeTime}${b.endTime?' ~ '+safeEndTime:''}</div>
+          <div class="booking-card-meta-item"><div style="width:7px;height:7px;border-radius:50%;background:${safeGet(t,'color','#ccc')}"></div>${safeTeacherName}</div>
           <div class="booking-card-meta-item">${b.mode==='線上'?'💻 線上':b.mode==='線上+實體'?'🏫💻 線上+實體':'🏫 實體'}</div>
         </div>
         ${b.meetingUrl?`<div style="margin-top:5px;font-size:10px;color:var(--sky)">🔗 線上連結已設定</div>`:''}
-        ${b.notes?`<div style="margin-top:6px;font-size:11px;color:var(--text-sub);background:var(--cream);padding:5px 8px;border-radius:5px">${b.notes.slice(0,60)}${b.notes.length>60?'…':''}</div>`:''}
+        ${b.notes?`<div style="margin-top:6px;font-size:11px;color:var(--text-sub);background:var(--cream);padding:5px 8px;border-radius:5px">${safeNotes}${b.notes.length>60?'…':''}</div>`:''}
       </div>
     </div>`;
   }).join('');
