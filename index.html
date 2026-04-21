@@ -428,7 +428,7 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
       <div class="toolbar-left">
         <div class="search-box">
           <span>🔍</span>
-          <input type="text" id="searchInput" placeholder="搜尋客戶、課程…" oninput="renderAll()">
+          <input type="text" id="searchInput" placeholder="搜尋客戶、課程…" oninput="renderAllDebounced()">
         </div>
         <select class="filter-select" id="filterTeacher" onchange="renderAll()">
           <option value="">所有老師</option>
@@ -608,12 +608,11 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
   </div>
   <div style="padding:12px 20px 24px;margin-top:auto;border-top:1px solid rgba(255,255,255,.08);display:flex;flex-direction:column;gap:8px">
     <!-- 群組資訊（登入後才顯示） -->
-    <div id="drawerGroupInfo" style="display:none;background:rgba(184,137,74,0.15);border:1px solid rgba(184,137,74,0.3);border-radius:8px;padding:10px 12px;margin-bottom:4px">
-      <div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:2px;color:var(--gold-light);margin-bottom:6px">群組代碼</div>
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <span id="drawerGroupCode" style="font-family:'DM Mono',monospace;font-size:16px;font-weight:700;color:var(--gold);letter-spacing:4px"></span>
-        <button onclick="openGroupManagement();closeDrawer()" style="padding:4px 10px;font-size:11px;border:1px solid rgba(184,137,74,0.4);border-radius:4px;background:transparent;cursor:pointer;color:var(--gold-light)">👥 管理</button>
-      </div>
+    <div id="drawerGroupInfo" style="display:none">
+      <button onclick="openGroupManagement();closeDrawer()" style="width:100%;padding:8px 12px;background:rgba(184,137,74,0.15);border:1px solid rgba(184,137,74,0.3);border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span id="drawerGroupCode" style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--gold);letter-spacing:2px"></span>
+        <span style="font-size:10px;color:var(--gold-light);opacity:0.7">群組管理 ›</span>
+      </button>
     </div>
     <button class="btn btn-outline btn-sm" id="drawerNotifBtn" onclick="toggleNotification();closeDrawer()" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px">🔔 課程通知</button>
     <button class="btn btn-outline btn-sm" style="width:100%;justify-content:center;display:flex;align-items:center;gap:6px" onclick="openGcalSettings();closeDrawer()">📅 Google 日曆同步</button>
@@ -1583,6 +1582,11 @@ async function saveFirebaseConfig() {
 }
 
 var cachedBasePath = null;
+var renderAllTimer = null;
+function renderAllDebounced() {
+  if (renderAllTimer) clearTimeout(renderAllTimer);
+  renderAllTimer = setTimeout(function() { renderAllTimer = null; renderAll(); }, 50);
+}
 
 function getUserPath() {
   if (!currentGroupId) return null;
@@ -1598,7 +1602,7 @@ var autoCompleteInterval = null;
 
 function startDataListeners() {
   stopDataListeners();
-  var base = getUserPath();
+  var base = getCachedPath();
   if (!base || !db) return;
   cachedBasePath = base;
 
@@ -1610,7 +1614,7 @@ function startDataListeners() {
     teachers = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
     teachersReady = true;
     renderTeacherUI();
-    if (bookingsReady) renderAll();
+    if (bookingsReady) renderAllDebounced();
   }, function(err) {
     console.error('[Firestore] teachers 監聽失敗:', err.code, err.message);
     if (err.code === 'permission-denied') {
@@ -1624,7 +1628,7 @@ function startDataListeners() {
     bookings = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
     bookingsReady = true;
     renderTeacherUI();
-    if (teachersReady) renderAll();
+    if (teachersReady) renderAllDebounced();
   }, function(err) {
     console.error('[Firestore] bookings 監聽失敗:', err.code, err.message);
     if (err.code === 'permission-denied') {
@@ -1655,42 +1659,58 @@ async function save() {}
 async function dbSetTeacher(t) {
   if (!db || !currentUser || !currentGroupId) return;
   var data = Object.assign({}, t); var id = data.id; delete data.id;
-  await db.collection((cachedBasePath || getUserPath()) + '/teachers').doc(id).set(data, { merge: true });
+  await db.collection((getCachedPath()) + '/teachers').doc(id).set(data, { merge: true });
 }
 
 async function dbDeleteTeacher(id) {
   if (!db || !currentUser || !currentGroupId) return;
-  await db.collection((cachedBasePath || getUserPath()) + '/teachers').doc(id).delete();
+  await db.collection((getCachedPath()) + '/teachers').doc(id).delete();
 }
 
 async function dbSetBooking(b) {
   if (!db || !currentUser || !currentGroupId) return;
   var data = Object.assign({}, b); var id = data.id; delete data.id;
-  await db.collection((cachedBasePath || getUserPath()) + '/bookings').doc(id).set(data, { merge: true });
+  await db.collection((getCachedPath()) + '/bookings').doc(id).set(data, { merge: true });
 }
 
 async function dbDeleteBooking(id) {
   if (!db || !currentUser || !currentGroupId) return;
-  await db.collection((cachedBasePath || getUserPath()) + '/bookings').doc(id).delete();
+  await db.collection((getCachedPath()) + '/bookings').doc(id).delete();
 }
 
 async function dbBatchImport(importTeachers, importBookings) {
   if (!db || !currentUser || !currentGroupId) return;
-  var base = getUserPath();
-  var batch = db.batch();
+  var base = getCachedPath();
+  var LIMIT = 499; // Firestore batch 上限 500，保守用 499
+
+  // Step1：先讀出現有所有 doc ref（分批刪除）
   var tSnap = await db.collection(base + '/teachers').get();
-  tSnap.docs.forEach(function(d) { batch.delete(d.ref); });
   var bSnap = await db.collection(base + '/bookings').get();
-  bSnap.docs.forEach(function(d) { batch.delete(d.ref); });
+  var allRefs = tSnap.docs.map(function(d){ return d.ref; })
+    .concat(bSnap.docs.map(function(d){ return d.ref; }));
+
+  // Step2：分批刪除現有資料
+  for (var di = 0; di < allRefs.length; di += LIMIT) {
+    var delBatch = db.batch();
+    allRefs.slice(di, di + LIMIT).forEach(function(ref){ delBatch.delete(ref); });
+    await delBatch.commit();
+  }
+
+  // Step3：分批寫入新資料
+  var allWrites = [];
   importTeachers.forEach(function(t) {
     var data = Object.assign({}, t); var id = data.id; delete data.id;
-    batch.set(db.collection(base + '/teachers').doc(id), data);
+    allWrites.push({ ref: db.collection(base + '/teachers').doc(id), data: data });
   });
   importBookings.forEach(function(b) {
     var data = Object.assign({}, b); var id = data.id; delete data.id;
-    batch.set(db.collection(base + '/bookings').doc(id), data);
+    allWrites.push({ ref: db.collection(base + '/bookings').doc(id), data: data });
   });
-  await batch.commit();
+  for (var wi = 0; wi < allWrites.length; wi += LIMIT) {
+    var setBatch = db.batch();
+    allWrites.slice(wi, wi + LIMIT).forEach(function(w){ setBatch.set(w.ref, w.data); });
+    await setBatch.commit();
+  }
 }
 
 // ── 安全工具函式 ──
@@ -2414,7 +2434,7 @@ function gcalCreateEvent(booking) {
       console.log('  API 回應 start:', JSON.stringify(data.start));
       console.log('  API 回應 end:  ', JSON.stringify(data.end));
       if (data.id) {
-        db.collection((cachedBasePath || getUserPath()) + '/bookings').doc(booking.id)
+        db.collection((getCachedPath()) + '/bookings').doc(booking.id)
           .update({ gcalEventId: data.id }).catch(function(){});
         var idx = bookings.findIndex(function(x){ return x.id === booking.id; });
         if (idx >= 0) bookings[idx].gcalEventId = data.id;
@@ -2541,15 +2561,23 @@ async function gcalPullFromCalendar() {
         return;
       }
 
-      // 逐一推送（gcalCreateEvent 內部有 retry 機制）
+      // 逐批推送（每批 5 筆並行，批次間等 500ms 避免 rate limit）
       var pushed = 0;
-      for (var i = 0; i < needPush.length; i++) {
-        if (pullBtn) pullBtn.textContent = '🔄 推送中… (' + (i + 1) + '/' + needPush.length + ')';
-        gcalCreateEvent(needPush[i]);
-        pushed++;
-        // 每 5 筆稍微延遲，避免 API rate limit
-        if (i > 0 && i % 5 === 0) {
-          await new Promise(function(r){ setTimeout(r, 300); });
+      var BATCH_SIZE = 5;
+      for (var i = 0; i < needPush.length; i += BATCH_SIZE) {
+        var batch = needPush.slice(i, i + BATCH_SIZE);
+        if (pullBtn) pullBtn.textContent = '🔄 推送中… (' + Math.min(i + BATCH_SIZE, needPush.length) + '/' + needPush.length + ')';
+        // 同批並行推送
+        await Promise.all(batch.map(function(b) {
+          return new Promise(function(resolve) {
+            gcalCreateEvent(b);
+            pushed++;
+            resolve();
+          });
+        }));
+        // 批次間等待，避免 API rate limit
+        if (i + BATCH_SIZE < needPush.length) {
+          await new Promise(function(r){ setTimeout(r, 500); });
         }
       }
 
@@ -2862,7 +2890,7 @@ function deleteBooking(id) {
   if (!b) return;
   showConfirm(
     '刪除預約',
-    '確定要刪除 <strong>' + b.name + '</strong> 的「' + b.course + '」預約？<br><span style="font-size:12px;color:var(--text-sub)">此操作無法復原。</span>',
+    '確定要刪除 <strong>' + escapeHtml(b.name) + '</strong> 的「' + escapeHtml(b.course) + '」預約？<br><span style="font-size:12px;color:var(--text-sub)">此操作無法復原。</span>',
     async function() {
       // 樂觀更新：先移除本地資料
       var prevBookings = bookings.slice();
@@ -2929,9 +2957,9 @@ function deleteTeacher(id, e) {
   var warnMsg = '';
 
   if (allBookings.length === 0) {
-    warnMsg = '確定要刪除老師 <strong>' + t.name + '</strong>？<br><span style="font-size:12px;color:var(--text-sub)">此操作無法復原。</span>';
+    warnMsg = '確定要刪除老師 <strong>' + escapeHtml(t.name) + '</strong>？<br><span style="font-size:12px;color:var(--text-sub)">此操作無法復原。</span>';
   } else {
-    warnMsg += '<div style="margin-bottom:10px;font-size:13px">刪除後，<strong>' + t.name + '</strong> 的所有預約老師欄位將顯示為「—」，預約記錄本身不會刪除。</div>';
+    warnMsg += '<div style="margin-bottom:10px;font-size:13px">刪除後，<strong>' + escapeHtml(t.name) + '</strong> 的所有預約老師欄位將顯示為「—」，預約記錄本身不會刪除。</div>';
 
     // 未完成課程列表（有才顯示）
     if (unfinishedBookings.length > 0) {
@@ -2960,7 +2988,7 @@ function deleteTeacher(id, e) {
         warnMsg += '<div style="display:grid;grid-template-columns:auto auto 1fr auto;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid #f0d090">'
           + '<span style="font-family:DM Mono,monospace;font-size:11px;color:var(--ink)">' + b.date + '</span>'
           + '<span style="font-family:DM Mono,monospace;font-size:11px;color:var(--text-sub)">' + b.time + (b.endTime ? '–'+b.endTime : '') + '</span>'
-          + '<span style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><strong>' + b.name + '</strong> · ' + b.course + '</span>'
+          + '<span style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><strong>' + escapeHtml(b.name) + '</strong> · ' + escapeHtml(b.course) + '</span>'
           + '<span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;flex-shrink:0;color:' + statusColor + ';background:' + statusBg + '">' + statusLabel + '</span>'
           + '</div>';
       });
@@ -2976,7 +3004,7 @@ function deleteTeacher(id, e) {
     warnMsg += '</div>';
   }
 
-  showConfirm('刪除老師：' + t.name, warnMsg, async function() {
+  showConfirm('刪除老師：' + escapeHtml(t.name), warnMsg, async function() {
     const prevTeachers = teachers.slice();
     teachers = teachers.filter(function(x){ return x.id !== id; });
     renderTeacherUI();
@@ -3793,7 +3821,7 @@ async function executeImport() {
 
   var MAX_IMPORT_RETRY = 3;
   var BATCH_LIMIT = 499;
-  var basePath = cachedBasePath || getUserPath();
+  var basePath = getCachedPath();
   var COLORS = ['#b8894a','#3d6b8c','#6b7c6e','#8b4a3c','#5a6e8c','#7c6b8a','#4a7c6b','#8c7a4a'];
 
   // 準備所有物件（只做一次）
@@ -4330,12 +4358,19 @@ function checkUpcomingClasses() {
 var autoCompleteRunning = false;
 async function autoCompleteBookings() {
   if (!currentUser || !db || !currentGroupId) return;
-  if (autoCompleteRunning) return; // 防止重複執行
+  if (autoCompleteRunning) return;
   var n = new Date();
   var todayStr = localDateStr(n);
   var nowMins = n.getHours() * 60 + n.getMinutes();
-  var toComplete = [];
 
+  // 效能優化：先快速檢查今天及以前是否有需要處理的 confirmed 預約
+  // 避免每分鐘掃描全部資料
+  var hasRelevant = bookings.some(function(b) {
+    return b.status === 'confirmed' && b.endTime && b.date <= todayStr;
+  });
+  if (!hasRelevant) return;
+
+  var toComplete = [];
   bookings.forEach(function(b) {
     if (b.status !== 'confirmed' || !b.endTime) return;
     var isOver = false;
@@ -4350,13 +4385,16 @@ async function autoCompleteBookings() {
 
   if (toComplete.length === 0) return;
   autoCompleteRunning = true;
-  var base = cachedBasePath || getUserPath();
+  var base = getCachedPath();
   if (!base) { autoCompleteRunning = false; return; }
   var batch = db.batch();
   toComplete.forEach(function(id) {
     batch.update(db.collection(base + '/bookings').doc(id), { status: 'completed' });
   });
-  try { await batch.commit(); } catch(e) { console.error('autoComplete error:', e); }
+  try {
+    await batch.commit();
+    console.log('[AutoComplete] 自動完成', toComplete.length, '筆預約');
+  } catch(e) { console.error('autoComplete error:', e); }
   finally { autoCompleteRunning = false; }
 }
 
