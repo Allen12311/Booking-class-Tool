@@ -296,7 +296,6 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
   .header-actions .btn-gold { padding: 7px 12px; font-size: 12px; }
   .header-actions .btn-gold .btn-label { display: none; }
   /* 手機版隱藏群組 ID 徽章、群組管理按鈕、登入頭像名稱（Drawer 裡已有） */
-  #groupBadge { display: none !important; }
   #groupMgmtBtn { display: none !important; }
   #userInfo { display: none !important; }
   /* 手機版 header 隱藏通知鈴鐺、匯出、新增預約（FAB 已取代 + 號，功能在 Drawer） */
@@ -389,10 +388,7 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
       <img id="userAvatar" style="width:28px;height:28px;border-radius:50%;border:1px solid var(--gold)" src="" alt="">
       <span id="userName" class="btn-label"></span>
     </div>
-    <div id="groupBadge" onclick="openGroupManagement()" style="display:none;align-items:center;gap:6px;background:rgba(184,137,74,0.2);border:1px solid var(--gold-light);border-radius:4px;padding:4px 10px;font-family:'DM Mono',monospace;font-size:10px;color:var(--gold-light);cursor:pointer" title="群組管理"></div>
-    <button class="btn btn-outline btn-sm" id="groupMgmtBtn" onclick="openGroupManagement()" style="display:none;align-items:center;gap:5px" title="群組管理">
-      <span>👥</span><span class="btn-label" style="font-size:11px">群組</span>
-    </button>
+    <button class="btn btn-outline btn-sm" id="groupMgmtBtn" onclick="openGroupManagement()" style="display:none;align-items:center;gap:5px;font-family:'DM Mono',monospace;font-size:10px" title="群組管理"></button>
 
     <button class="btn btn-outline btn-sm" id="notifBtn" onclick="toggleNotification()" title="課程提醒通知" style="display:flex;align-items:center;gap:5px">
       <span id="notifIcon">🔔</span><span id="notifLabel" class="btn-label" style="font-size:11px">通知</span>
@@ -1190,13 +1186,15 @@ function checkGroupRequired() {
 }
 
 function updateGroupUI() {
-  var badge = document.getElementById('groupBadge');
   var mgmtBtn = document.getElementById('groupMgmtBtn');
-  if (badge) {
-    badge.textContent = currentGroupId ? ('群組: ' + currentGroupId.slice(4)) : '';
-    badge.style.display = currentGroupId ? 'flex' : 'none';
+  if (mgmtBtn) {
+    if (currentGroupId) {
+      mgmtBtn.style.display = 'flex';
+      mgmtBtn.innerHTML = '<span style="font-size:10px;letter-spacing:1px;font-family:\'DM Mono\',monospace">' + currentGroupId.slice(4) + '</span>';
+    } else {
+      mgmtBtn.style.display = 'none';
+    }
   }
-  if (mgmtBtn) mgmtBtn.style.display = currentGroupId ? 'flex' : 'none';
   // 更新 Drawer 的群組資訊
   var drawerGroupInfo = document.getElementById('drawerGroupInfo');
   if (drawerGroupInfo) {
