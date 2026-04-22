@@ -1784,6 +1784,7 @@ function switchNav(v) {
   document.getElementById('filterStatus').value = '';
   statsStatusFilter = '';
   statsSelectedTeacher = '';
+  statsSelectedMonth = 0;
   // 切換頁面時清除多選狀態
   multiSelectMode = false;
   selectedBookingIds.clear();
@@ -3504,8 +3505,9 @@ function renderStats() {
 }
 
 function selectStatsMonth(m) {
-  statsSelectedMonth = (statsSelectedMonth === m) ? 0 : m; // 再次點擊取消
+  statsSelectedMonth = (statsSelectedMonth === m) ? 0 : m;
   statsSelectedTeacher = '';
+  statsStatusFilter = '';
   renderStats();
 }
 
@@ -3566,12 +3568,14 @@ function statsJumpMonth(m) {
   statsMonth = parseInt(m, 10);
   statsSelectedTeacher = '';
   statsStatusFilter = '';
+  statsSelectedMonth = 0;
   renderStats();
 }
 
 function setStatsStatus(s) {
   statsStatusFilter = statsStatusFilter === s ? '' : s;
   statsSelectedTeacher = '';
+  statsSelectedMonth = 0;
   renderStats();
 }
 
