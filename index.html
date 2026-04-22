@@ -3399,49 +3399,49 @@ function renderStats() {
     + '</div>';
 
   // 期間切換 tabs
-  html += '<div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:var(--shadow)">'
-    + '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px">'
-    + '<div>'
-    + '<div>'
-    + '<div style="font-size:15px;font-weight:600;color:var(--ink)">' + periodLabel + ' 課程統計</div>'
+  var isToday = statsPeriod === 'month' ? isCurrentMonth : isCurrentYear;
+  html += '<div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin-bottom:20px;box-shadow:var(--shadow)">'
+    // ── 第一列：標題 ──
+    + '<div style="margin-bottom:12px">'
+    + '<div style="font-size:15px;font-weight:700;color:var(--ink)">' + periodLabel + ' 課程統計</div>'
     + '<div style="font-size:11px;color:var(--text-sub);margin-top:2px">'
-    + (statsStatusFilter ? ('篩選：' + {confirmed:'已確認',pending:'待確認',completed:'已完成',cancelled:'已取消'}[statsStatusFilter] + '　共 ' + displayBookings.length + ' 堂') : ('不含已取消共 ' + activeBookings.length + ' 堂'))
-    + (statsStatusFilter ? '　<span style="cursor:pointer;color:var(--gold);text-decoration:underline" onclick="setStatsStatus(\'\')">清除篩選</span>' : '')
+    + (statsStatusFilter ? ('篩選：' + {confirmed:'已確認',pending:'待確認',completed:'已完成',cancelled:'已取消'}[statsStatusFilter] + '　共 ' + displayBookings.length + ' 堂　<span style="cursor:pointer;color:var(--gold);text-decoration:underline" onclick="setStatsStatus(\'\')">清除</span>') : ('不含已取消共 ' + activeBookings.length + ' 堂'))
     + '</div>'
     + '</div>'
-    + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
-    // 月份/年份導航
-    + '<div style="display:flex;align-items:center;gap:4px">'
-    + '<button onclick="statsNavPrev()" style="width:28px;height:28px;border-radius:5px;border:1px solid var(--border);background:var(--paper);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center" title="上一' + (statsPeriod==='month'?'月':'年') + '">‹</button>'
-    // 年份下拉
-    + '<select onchange="statsJumpYear(this.value)" style="font-family:\'DM Mono\',monospace;font-size:11px;padding:4px 6px;border:1px solid var(--border);border-radius:5px;background:var(--paper);color:var(--ink);cursor:pointer;outline:none">'
+    // ── 第二列：導航列，所有元素固定高度 30px，不 wrap ──
+    + '<div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px;margin-bottom:16px">'
+    // ‹ 上一
+    + '<button onclick="statsNavPrev()" title="上一' + (statsPeriod==='month'?'月':'年') + '" style="flex-shrink:0;width:30px;height:30px;border-radius:6px;border:1px solid var(--border);background:var(--cream);cursor:pointer;font-size:15px;color:var(--ink)">‹</button>'
+    // 年份 select
+    + '<select onchange="statsJumpYear(this.value)" style="flex-shrink:0;height:30px;font-family:\'DM Mono\',monospace;font-size:11px;padding:0 6px;border:1px solid var(--border);border-radius:6px;background:var(--cream);color:var(--ink);cursor:pointer;outline:none">'
     + (function() {
         var opts = '';
         for (var y = now.getFullYear() - 3; y <= now.getFullYear() + 2; y++) {
-          opts += '<option value="' + y + '"' + (y === statsYear ? ' selected' : '') + '>' + y + '</option>';
+          opts += '<option value="' + y + '"' + (y === statsYear ? ' selected' : '') + '>' + y + ' 年</option>';
         }
         return opts;
       })()
     + '</select>'
-    // 月份下拉（只在月視圖顯示）
-    + (statsPeriod === 'month'
-      ? '<select onchange="statsJumpMonth(this.value)" style="font-family:\'DM Mono\',monospace;font-size:11px;padding:4px 6px;border:1px solid var(--border);border-radius:5px;background:var(--paper);color:var(--ink);cursor:pointer;outline:none">'
-        + ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'].map(function(name, i) {
-            return '<option value="' + (i+1) + '"' + ((i+1) === statsMonth ? ' selected' : '') + '>' + name + '</option>';
-          }).join('')
-        + '</select>'
-      : '')
-    + '<button onclick="statsNavToday()" style="padding:4px 10px;border-radius:5px;border:1px solid var(--border);background:' + ((statsPeriod==='month'?isCurrentMonth:isCurrentYear)?'var(--ink)':'var(--paper)') + ';color:' + ((statsPeriod==='month'?isCurrentMonth:isCurrentYear)?'#fff':'var(--text-sub)') + ';cursor:pointer;font-family:DM Mono,monospace;font-size:10px">今</button>'
-    + '<button onclick="statsNavNext()" style="width:28px;height:28px;border-radius:5px;border:1px solid var(--border);background:var(--paper);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center" title="下一' + (statsPeriod==='month'?'月':'年') + '">›</button>'
+    // 月份 select — 月視圖顯示，年視圖用 visibility:hidden 保留空間避免版面跳動
+    + '<select onchange="statsJumpMonth(this.value)" style="flex-shrink:0;height:30px;font-family:\'Noto Serif TC\',serif;font-size:11px;padding:0 6px;border:1px solid var(--border);border-radius:6px;background:var(--cream);color:var(--ink);cursor:pointer;outline:none;visibility:' + (statsPeriod==='month'?'visible':'hidden') + '">'
+    + ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'].map(function(name, i) {
+        return '<option value="' + (i+1) + '"' + ((i+1) === statsMonth ? ' selected' : '') + '>' + name + '</option>';
+      }).join('')
+    + '</select>'
+    // 今 button
+    + '<button onclick="statsNavToday()" style="flex-shrink:0;height:30px;padding:0 12px;border-radius:6px;border:1px solid ' + (isToday ? 'var(--gold)' : 'var(--border)') + ';background:' + (isToday ? 'var(--gold)' : 'var(--cream)') + ';color:' + (isToday ? '#fff' : 'var(--text-sub)') + ';cursor:pointer;font-family:\'DM Mono\',monospace;font-size:10px;white-space:nowrap">今</button>'
+    // › 下一
+    + '<button onclick="statsNavNext()" title="下一' + (statsPeriod==='month'?'月':'年') + '" style="flex-shrink:0;width:30px;height:30px;border-radius:6px;border:1px solid var(--border);background:var(--cream);cursor:pointer;font-size:15px;color:var(--ink)">›</button>'
+    // 分隔
+    + '<div style="flex:1"></div>'
+    // 月 / 年 tab（推到最右側）
+    + '<div style="display:flex;gap:2px;background:var(--cream);border:1px solid var(--border);border-radius:6px;padding:3px;flex-shrink:0">'
+    + '<button onclick="setStatsPeriod(\'month\')" style="height:24px;padding:0 14px;border-radius:4px;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;' + (statsPeriod==='month' ? 'background:var(--ink);color:#fff' : 'background:transparent;color:var(--text-sub)') + '">月</button>'
+    + '<button onclick="setStatsPeriod(\'year\')" style="height:24px;padding:0 14px;border-radius:4px;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;' + (statsPeriod==='year' ? 'background:var(--ink);color:#fff' : 'background:transparent;color:var(--text-sub)') + '">年</button>'
     + '</div>'
-    // 本月/年度 tab
-    + '<div style="display:flex;gap:2px;background:var(--cream);border:1px solid var(--border);border-radius:6px;padding:3px">'
-    + '<button onclick="setStatsPeriod(\'month\')" style="padding:6px 14px;border-radius:4px;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;' + (statsPeriod==='month' ? 'background:var(--ink);color:#fff' : 'background:transparent;color:var(--text-sub)') + '">月</button>'
-    + '<button onclick="setStatsPeriod(\'year\')" style="padding:6px 14px;border-radius:4px;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;' + (statsPeriod==='year' ? 'background:var(--ink);color:#fff' : 'background:transparent;color:var(--text-sub)') + '">年</button>'
     + '</div>'
-    + '</div></div>'
-    // 可點擊狀態篩選卡片（4格）
-    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px">'
+    // ── 狀態篩選卡片 ──
+    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:0">'
     + (function() {
         var cards = [
           { status:'pending',   label:'待確認', color:'#8b5e1a', bg:'#fef3e2' },
