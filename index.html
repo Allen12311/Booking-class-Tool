@@ -3416,14 +3416,14 @@ function renderStats() {
     + '<select onchange="statsJumpYear(this.value)" style="flex-shrink:0;height:30px;font-family:\'DM Mono\',monospace;font-size:11px;padding:0 6px;border:1px solid var(--border);border-radius:6px;background:var(--cream);color:var(--ink);cursor:pointer;outline:none">'
     + (function() {
         var opts = '';
-        for (var y = now.getFullYear() - 3; y <= now.getFullYear() + 2; y++) {
+        for (var y = 2025; y <= 2035; y++) {
           opts += '<option value="' + y + '"' + (y === statsYear ? ' selected' : '') + '>' + y + ' 年</option>';
         }
         return opts;
       })()
     + '</select>'
-    // 月份 select — 月視圖顯示，年視圖用 visibility:hidden 保留空間避免版面跳動
-    + '<select onchange="statsJumpMonth(this.value)" style="flex-shrink:0;height:30px;font-family:\'Noto Serif TC\',serif;font-size:11px;padding:0 6px;border:1px solid var(--border);border-radius:6px;background:var(--cream);color:var(--ink);cursor:pointer;outline:none;visibility:' + (statsPeriod==='month'?'visible':'hidden') + '">'
+    // 月份 select — 月視圖正常可選，年視圖時 disabled + 半透明
+    + '<select onchange="statsJumpMonth(this.value)" ' + (statsPeriod==='year' ? 'disabled ' : '') + 'style="flex-shrink:0;height:30px;font-family:\'Noto Serif TC\',serif;font-size:11px;padding:0 6px;border:1px solid var(--border);border-radius:6px;background:var(--cream);color:var(--ink);cursor:' + (statsPeriod==='year' ? 'not-allowed' : 'pointer') + ';outline:none;opacity:' + (statsPeriod==='year' ? '0.4' : '1') + '">'
     + ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'].map(function(name, i) {
         return '<option value="' + (i+1) + '"' + ((i+1) === statsMonth ? ' selected' : '') + '>' + name + '</option>';
       }).join('')
