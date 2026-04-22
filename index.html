@@ -3217,9 +3217,10 @@ function renderTable() {
 
 let statsPeriod = 'month';
 let statsYear = now.getFullYear();
-let statsMonth = now.getMonth() + 1; // 1-12
+let statsMonth = now.getMonth() + 1;
 let statsSelectedTeacher = '';
 let statsStatusFilter = '';
+let statsSelectedMonth = 0; // 年視圖點擊的月份（0 = 未選）
 let periodBookings_cache = [];
 
 function renderStats() {
@@ -3236,13 +3237,21 @@ function renderStats() {
 
   // 根據篩選期間過濾
   const mnNames = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
-  const periodLabel = statsPeriod === 'month' ? (yr + ' 年 ' + mo + ' 月') : (yr + ' 年度');
+  // 年視圖點擊月份時，標題顯示該月
+  const periodLabel = statsPeriod === 'month'
+    ? (yr + ' 年 ' + mo + ' 月')
+    : (statsSelectedMonth > 0
+        ? (yr + ' 年 ' + statsSelectedMonth + ' 月（年度篩選）')
+        : (yr + ' 年度'));
   const periodBookings = bookings.filter(function(b) {
     if (statsPeriod === 'month') return b.date.startsWith(yrStr + '-' + moStr);
+    if (statsSelectedMonth > 0) {
+      // 年視圖選了某月 → 只看那個月
+      return b.date.startsWith(yrStr + '-' + String(statsSelectedMonth).padStart(2,'0'));
+    }
     return b.date.startsWith(yrStr);
   });
   const activeBookings = periodBookings.filter(function(b) { return b.status !== 'cancelled'; });
-  // 若有狀態篩選則套用，否則預設不含取消
   const displayBookings = statsStatusFilter
     ? periodBookings.filter(function(b) { return b.status === statsStatusFilter; })
     : activeBookings;
@@ -3286,26 +3295,38 @@ function renderStats() {
     }
     var maxVal = Math.max.apply(null, monthlyCount.concat([1]));
     barChartHtml = '<div style="border-top:1px solid var(--border);padding-top:16px;margin-top:4px">'
-      + '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase;margin-bottom:12px">各月走勢</div>'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+      + '<div style="font-family:DM Mono,monospace;font-size:9px;letter-spacing:2px;color:var(--text-sub);text-transform:uppercase">各月走勢</div>'
+      + (statsSelectedMonth > 0 ? '<span style="font-size:11px;color:var(--text-sub);cursor:pointer;text-decoration:underline" onclick="selectStatsMonth(0)">清除月份篩選</span>' : '')
+      + '</div>'
       + '<div style="display:flex;gap:3px;align-items:flex-end;height:80px">';
     monthlyCount.forEach(function(cnt, i) {
       var h = Math.round((cnt / maxVal) * 60);
       var isCur = (i + 1) === mo;
-      var col = isCur ? 'var(--gold)' : 'var(--sky)';
-      var opacity = isCur ? '1' : '0.5';
-      barChartHtml += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">'
+      var isSelMonth = statsSelectedMonth === (i + 1);
+      var col = isSelMonth ? 'var(--gold)' : (isCur ? 'var(--sky)' : 'var(--sky)');
+      var opacity = isSelMonth ? '1' : (cnt > 0 ? '0.5' : '0.2');
+      var cursor = cnt > 0 ? 'cursor:pointer;' : '';
+      barChartHtml += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;' + cursor + '" onclick="' + (cnt > 0 ? 'selectStatsMonth(' + (i+1) + ')' : '') + '">'
         + '<span style="font-family:DM Mono,monospace;font-size:8px;color:' + (cnt > 0 ? 'var(--ink)' : 'transparent') + '">' + cnt + '</span>'
         + '<div style="width:100%;display:flex;align-items:flex-end;flex:1">'
-        + '<div style="width:100%;height:' + (h || 2) + 'px;background:' + col + ';opacity:' + opacity + ';border-radius:2px 2px 0 0;min-height:2px"></div></div>'
-        + '<span style="font-family:DM Mono,monospace;font-size:8px;color:' + (isCur ? 'var(--gold)' : 'var(--text-sub)') + (isCur ? ';font-weight:700' : '') + '">' + monthNames[i] + '</span>'
+        + '<div style="width:100%;height:' + (h || 2) + 'px;background:' + col + ';opacity:' + opacity + ';border-radius:2px 2px 0 0;min-height:2px;transition:opacity 0.15s"></div></div>'
+        + '<span style="font-family:DM Mono,monospace;font-size:8px;font-weight:' + (isSelMonth ? '700' : (isCur ? '700' : '400')) + ';color:' + (isSelMonth ? 'var(--gold)' : (isCur ? 'var(--sky)' : 'var(--text-sub)')) + '">' + monthNames[i] + '</span>'
         + '</div>';
     });
     barChartHtml += '</div></div>';
   }
 
   // ── 老師卡片 ──
+  // 年視圖選了某月時，只顯示該月有課的老師
+  var visibleTeachers = (statsPeriod === 'year' && statsSelectedMonth > 0)
+    ? teachers.filter(function(t) {
+        return displayBookings.some(function(b) { return b.teacherId === t.id; });
+      })
+    : teachers;
+
   var tCardsHtml = '';
-  teachers.forEach(function(t) {
+  visibleTeachers.forEach(function(t) {
     var tb = displayBookings.filter(function(b) { return b.teacherId === t.id; });
     var tbAll = periodBookings.filter(function(b) { return b.teacherId === t.id; });
     var isSelected = statsSelectedTeacher === t.id;
@@ -3329,7 +3350,11 @@ function renderStats() {
       + '<div class="stat-sub" style="margin-top:6px">' + subLine + '</div>'
       + '</div>';
   });
-  if (!tCardsHtml) tCardsHtml = '<div style="color:var(--text-sub);padding:12px 0">尚無老師資料</div>';
+  if (!tCardsHtml) {
+    tCardsHtml = statsSelectedMonth > 0
+      ? '<div style="color:var(--text-sub);padding:12px 0">' + statsSelectedMonth + ' 月無課程資料</div>'
+      : '<div style="color:var(--text-sub);padding:12px 0">尚無老師資料</div>';
+  }
 
   // ── 老師詳情列表 ──
   var detailHtml = '';
@@ -3468,20 +3493,29 @@ function renderStats() {
     + barChartHtml
     + '</div>';
 
-  html += '<div class="section-header"><div class="section-title">各老師統計</div></div>';
+  var teacherSectionTitle = (statsPeriod === 'year' && statsSelectedMonth > 0)
+    ? (statsSelectedMonth + ' 月有課老師')
+    : '各老師統計';
+  html += '<div class="section-header"><div class="section-title">' + teacherSectionTitle + '</div></div>';
   html += '<div class="stats-row">' + tCardsHtml + '</div>';
   html += detailHtml;
 
   c.innerHTML = html;
 }
 
+function selectStatsMonth(m) {
+  statsSelectedMonth = (statsSelectedMonth === m) ? 0 : m; // 再次點擊取消
+  statsSelectedTeacher = '';
+  renderStats();
+}
+
 function setStatsPeriod(p) {
   statsPeriod = p;
-  // 切換模式時回到當前月/年
   statsYear  = now.getFullYear();
   statsMonth = now.getMonth() + 1;
   statsSelectedTeacher = '';
   statsStatusFilter = '';
+  statsSelectedMonth = 0;
   renderStats();
 }
 
@@ -3494,6 +3528,7 @@ function statsNavPrev() {
   }
   statsSelectedTeacher = '';
   statsStatusFilter = '';
+  statsSelectedMonth = 0;
   renderStats();
 }
 
@@ -3506,6 +3541,7 @@ function statsNavNext() {
   }
   statsSelectedTeacher = '';
   statsStatusFilter = '';
+  statsSelectedMonth = 0;
   renderStats();
 }
 
@@ -3514,6 +3550,7 @@ function statsNavToday() {
   statsMonth = now.getMonth() + 1;
   statsSelectedTeacher = '';
   statsStatusFilter = '';
+  statsSelectedMonth = 0;
   renderStats();
 }
 
@@ -3521,6 +3558,7 @@ function statsJumpYear(y) {
   statsYear = parseInt(y, 10);
   statsSelectedTeacher = '';
   statsStatusFilter = '';
+  statsSelectedMonth = 0;
   renderStats();
 }
 
