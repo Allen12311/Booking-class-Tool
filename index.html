@@ -1782,9 +1782,15 @@ function switchNav(v) {
   document.getElementById('searchInput').value = '';
   document.getElementById('filterTeacher').value = '';
   document.getElementById('filterStatus').value = '';
+  // 統計頁篩選全部重置
   statsStatusFilter = '';
   statsSelectedTeacher = '';
   statsSelectedMonth = 0;
+  statsYear = now.getFullYear();
+  statsMonth = now.getMonth() + 1;
+  // 月曆回到今天
+  calYear = now.getFullYear();
+  calMonth = now.getMonth();
   // 切換頁面時清除多選狀態
   multiSelectMode = false;
   selectedBookingIds.clear();
@@ -3524,8 +3530,12 @@ function setStatsPeriod(p) {
 function statsNavPrev() {
   if (statsPeriod === 'month') {
     statsMonth--;
-    if (statsMonth < 1) { statsMonth = 12; statsYear--; }
+    if (statsMonth < 1) {
+      if (statsYear <= 2025) { statsMonth = 1; return; } // 已到下限
+      statsMonth = 12; statsYear--;
+    }
   } else {
+    if (statsYear <= 2025) return; // 已到下限
     statsYear--;
   }
   statsSelectedTeacher = '';
@@ -3537,8 +3547,12 @@ function statsNavPrev() {
 function statsNavNext() {
   if (statsPeriod === 'month') {
     statsMonth++;
-    if (statsMonth > 12) { statsMonth = 1; statsYear++; }
+    if (statsMonth > 12) {
+      if (statsYear >= 2035) { statsMonth = 12; return; } // 已到上限
+      statsMonth = 1; statsYear++;
+    }
   } else {
+    if (statsYear >= 2035) return; // 已到上限
     statsYear++;
   }
   statsSelectedTeacher = '';
@@ -3646,8 +3660,14 @@ function onCalSelChange() {
   renderCalendar();
 }
 function changeMonth(d) {
-  calMonth+=d;
-  if(calMonth<0){calMonth=11;calYear--;} if(calMonth>11){calMonth=0;calYear++;}
+  calMonth += d;
+  if (calMonth < 0) {
+    if (calYear <= 2025) { calMonth = 0; return; } // 已到下限
+    calMonth = 11; calYear--;
+  } else if (calMonth > 11) {
+    if (calYear >= 2035) { calMonth = 11; return; } // 已到上限
+    calMonth = 0; calYear++;
+  }
   renderCalendar();
 }
 function goToday() { calYear=now.getFullYear(); calMonth=now.getMonth(); renderCalendar(); }
