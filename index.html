@@ -990,8 +990,10 @@ var unsubscribeTeachers = null;
 var unsubscribeBookings = null;
 
 // ── 閒置自動登出（1天）──
-var IDLE_TIMEOUT = 24 * 60 * 60 * 1000; // 24小時
+var IDLE_TIMEOUT = 5 * 60 * 60 * 1000; // 5小時閒置自動登出
 var IDLE_KEY = 'sb_last_active';
+var TOKEN_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 分鐘（Firebase token 1小時過期，提前 10 分鐘刷新）
+var tokenRefreshTimer = null;
 var idleTimer = null;
 var idleCheckTimer = null;
 
@@ -1005,7 +1007,7 @@ function checkIdleTimeout() {
   var last = parseInt(localStorage.getItem(IDLE_KEY) || '0', 10);
   if (last > 0 && Date.now() - last > IDLE_TIMEOUT) {
     auth.signOut();
-    toast('閒置超過 1 天，已自動登出', '🔕');
+    toast('閒置超過 5 小時，已自動登出', '🔕');
   }
 }
 
@@ -1026,6 +1028,59 @@ function stopIdleTimer() {
     document.removeEventListener(ev, resetIdleTimer);
   });
   if (idleCheckTimer) { clearInterval(idleCheckTimer); idleCheckTimer = null; }
+}
+
+// ── Firebase Token 自動刷新機制 ──
+// Firebase ID token 每 1 小時過期，SDK 背景刷新，但網路異常時可能失敗
+// 每 50 分鐘主動呼叫 getIdToken(true) 強制刷新，失敗則自動登出
+
+function startTokenRefresh() {
+  stopTokenRefresh();
+  tokenRefreshTimer = setInterval(function() {
+    if (!currentUser || !auth) return;
+    currentUser.getIdToken(true).then(function() {
+      console.log('[Auth] Token 刷新成功');
+    }).catch(function(err) {
+      console.error('[Auth] Token 刷新失敗，自動登出:', err.code);
+      handleAuthError(err);
+    });
+  }, TOKEN_REFRESH_INTERVAL);
+}
+
+function stopTokenRefresh() {
+  if (tokenRefreshTimer) { clearInterval(tokenRefreshTimer); tokenRefreshTimer = null; }
+}
+
+// 統一的 auth 錯誤處理：先 signOut 再顯示登入畫面，確保狀態一致
+function handleAuthError(err) {
+  var code = err && err.code ? err.code : '';
+  var isAuthErr = code === 'auth/user-token-expired'
+    || code === 'auth/invalid-user-token'
+    || code === 'auth/user-disabled'
+    || code === 'auth/network-request-failed'
+    || code === 'permission-denied';
+  if (!isAuthErr && !currentUser) return;
+  console.warn('[Auth] handleAuthError:', code, '→ 執行登出');
+  // 先停止所有背景工作
+  stopDataListeners();
+  stopIdleTimer();
+  stopTokenRefresh();
+  // 執行 Firebase signOut，觸發 onAuthStateChanged(null) 做清理
+  if (auth) {
+    auth.signOut().catch(function() {});
+  }
+  // 顯示說明
+  var msg = '';
+  if (code === 'auth/user-token-expired' || code === 'auth/invalid-user-token') {
+    msg = '登入已過期，請重新登入';
+  } else if (code === 'auth/network-request-failed') {
+    msg = '網路連線中斷，請確認網路後重新登入';
+  } else if (code === 'permission-denied') {
+    msg = '存取權限已變更，請重新登入';
+  } else {
+    msg = '驗證失敗，請重新登入';
+  }
+  toast(msg, '🔐');
 }
 
 function getFirebaseConfig() {
@@ -1107,6 +1162,8 @@ function onAuthStateChanged(user) {
     startIdleTimer();
     // 登入後立即檢查是否已超過閒置時間（處理重開頁面的情況）
     checkIdleTimeout();
+    // 啟動 Firebase token 自動刷新（每 50 分鐘）
+    startTokenRefresh();
     updateGcalWidget();
     checkUserGroup();
   } else {
@@ -1118,6 +1175,7 @@ function onAuthStateChanged(user) {
     if (authBtn) { authBtn.querySelector('.btn-label').textContent = '登入'; authBtn.querySelector('span:first-child').textContent = '👤'; }
     if (drawerAuthBtn) { drawerAuthBtn.innerHTML = '👤 登入'; }
     stopIdleTimer();
+    stopTokenRefresh();
     localStorage.removeItem(IDLE_KEY);
     // token 保留在 localStorage，重新登入後可直接使用，不需重新授權
     gcalAccessToken = null; // 只清除記憶體變數
@@ -1618,7 +1676,7 @@ function startDataListeners() {
   }, function(err) {
     console.error('[Firestore] teachers 監聽失敗:', err.code, err.message);
     if (err.code === 'permission-denied') {
-      toast('無資料讀取權限，請確認群組設定', '⚠️');
+      handleAuthError(err);
     } else {
       toast('資料同步中斷，請重新整理頁面', '⚠️');
     }
@@ -1632,7 +1690,7 @@ function startDataListeners() {
   }, function(err) {
     console.error('[Firestore] bookings 監聽失敗:', err.code, err.message);
     if (err.code === 'permission-denied') {
-      toast('無資料讀取權限，請確認群組設定', '⚠️');
+      handleAuthError(err);
     } else {
       toast('資料同步中斷，請重新整理頁面', '⚠️');
     }
