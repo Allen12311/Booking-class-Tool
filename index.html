@@ -1139,16 +1139,13 @@ async function initFirebase(config) {
 function onAuthStateChanged(user) {
   currentUser = user;
   if (user) {
-    document.getElementById('loginOverlay').style.display = 'none';
-    // ── Google Calendar 授權流程 ──
-    // 若正在執行 signInWithPopup，跳過這裡的 GCal 處理
-    // 讓 signInWithPopup.then() 統一負責，避免兩個並行刷新請求
+    // ⚠️ loginOverlay 不在這裡隱藏，等 checkUserGroup 完成後才隱藏
+    // 避免登入驗證期間主畫面短暫可見
     if (!gcalLoginInProgress) {
       gcalHandleAuthStateChange(user);
     } else {
       console.log('[GCal] 登入進行中，onAuthStateChanged 跳過 GCal 處理');
     }
-    // 同步帳號由授權成功時設定，不在這裡自動設定
     var userInfo = document.getElementById('userInfo');
     var userName = document.getElementById('userName');
     var userAvatar = document.getElementById('userAvatar');
@@ -1160,12 +1157,10 @@ function onAuthStateChanged(user) {
     if (authBtn) { authBtn.querySelector('.btn-label').textContent = '登出'; authBtn.querySelector('span:first-child').textContent = '🚪'; }
     if (drawerAuthBtn) { drawerAuthBtn.innerHTML = '🚪 登出'; }
     startIdleTimer();
-    // 登入後立即檢查是否已超過閒置時間（處理重開頁面的情況）
     checkIdleTimeout();
-    // 啟動 Firebase token 自動刷新（每 50 分鐘）
     startTokenRefresh();
     updateGcalWidget();
-    checkUserGroup();
+    checkUserGroup(); // 完成後才隱藏 loginOverlay
   } else {
     document.getElementById('loginOverlay').style.display = 'flex';
     var userInfo = document.getElementById('userInfo');
@@ -1198,10 +1193,16 @@ function onAuthStateChanged(user) {
 // ── 群組管理 ──
 async function checkUserGroup() {
   if (!db || !currentUser) return;
+  // 顯示載入中提示（loginOverlay 繼續顯示）
+  var statusEl = document.getElementById('loginStatus');
+  if (statusEl) statusEl.textContent = '驗證身份中，請稍候…';
   try {
     var snap = await db.collection('groups')
       .where('memberUIDs', 'array-contains', currentUser.uid)
       .limit(1).get();
+    // 驗證完成，才隱藏 loginOverlay
+    document.getElementById('loginOverlay').style.display = 'none';
+    if (statusEl) statusEl.textContent = '';
     if (!snap.empty) {
       var doc = snap.docs[0];
       currentGroupId = doc.id;
@@ -1212,9 +1213,9 @@ async function checkUserGroup() {
     }
   } catch(e) {
     console.error('checkUserGroup error:', e);
-    var statusEl = document.getElementById('loginStatus');
     if (statusEl) statusEl.textContent = '載入群組失敗，請確認網路後重新整理頁面';
     toast('載入群組失敗，請確認網路連線', '⚠️');
+    // 驗證失敗，保持 loginOverlay 顯示，讓使用者重試
   }
 }
 
@@ -1570,11 +1571,9 @@ function checkRedirectResult() {
   if (!auth) return;
   auth.getRedirectResult().then(function(result) {
     if (result && result.user) {
-      // getRedirectResult 成功後 onAuthStateChanged 會自動觸發
-      // 但為保險起見，直接隱藏登入頁
-      var loginOverlay = document.getElementById('loginOverlay');
-      if (loginOverlay) loginOverlay.style.display = 'none';
-    } else {
+      // onAuthStateChanged 會自動觸發並負責後續流程（含隱藏 loginOverlay）
+      // 不在這裡直接隱藏，避免繞過 checkUserGroup 驗證
+      console.log('[Firebase] getRedirectResult 成功，等待 onAuthStateChanged');
     }
   }).catch(function(err) {
     console.error('[Firebase] getRedirectResult 失敗:', err.code, err.message);
