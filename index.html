@@ -963,8 +963,10 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
     </div>
   </div>
 </div>
-
 <script>
+// ── 修正：在全域範圍最上方定義此變數，避免 ReferenceError ──
+var gcalLoginInProgress = false;
+
 // ── Firebase 設定 ──
 // ▼▼▼ 將你的 Firebase 設定填入此處，填好後用戶永遠不需要手動設定 ▼▼▼
 var BUILT_IN_FIREBASE_CONFIG = {
@@ -988,6 +990,7 @@ var currentUser = null;
 var currentGroupId = null;
 var unsubscribeTeachers = null;
 var unsubscribeBookings = null;
+
 
 // ── 閒置自動登出（1天）──
 var IDLE_TIMEOUT = 5 * 60 * 60 * 1000; // 5小時閒置自動登出
