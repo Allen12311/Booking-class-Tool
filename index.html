@@ -881,12 +881,12 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
   </div>
 </div>
 
-<!-- IMPORT CSV MODAL -->
-<div class="overlay" id="importOverlay">
+<!-- IMPORT CSV MODAL (Full version with preview) -->
+<div class="overlay" id="importCsvOverlay">
   <div class="modal" style="width:520px;max-width:95vw">
     <div class="modal-header">
       <div><div class="modal-title">📥 匯入預約資料</div><div class="modal-sub">Import from CSV</div></div>
-      <button class="close-btn" onclick="closeModal('importOverlay')">✕</button>
+      <button class="close-btn" onclick="closeModal('importCsvOverlay')">✕</button>
     </div>
     <div class="modal-body">
       <!-- 說明 -->
@@ -928,7 +928,7 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
       </div>
     </div>
     <div class="modal-footer" style="justify-content:space-between">
-      <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('importOverlay')">取消</button>
+      <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--ink);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('importCsvOverlay')">取消</button>
       <button id="importConfirmBtn" class="btn btn-gold btn-sm" onclick="executeImport()" style="display:none">✅ 確認匯入</button>
     </div>
   </div>
@@ -1015,7 +1015,6 @@ function checkIdleTimeout() {
     console.warn('[Idle] 閒置超過限制，執行自動登出');
     // Bug Fix #2: 登出前先停止所有背景任務，確保不再有背景操作
     stopTokenRefresh();
-    stopGcalRefresh();
     auth.signOut();
     toast('閒置超過 5 小時，已自動登出', '🔕');
   }
@@ -1050,8 +1049,8 @@ function stopIdleTimer() {
 //   2. 檢查 GCal token 剩餘時間 → 即將過期才靜默刷新
 // 使用 _bgTaskCount 計數器鎖（而非 boolean），支援多個非同步任務並行
 
-// 【廢除】gcalRefreshTimer 獨立 setInterval（改由 tokenRefreshTimer 統一管理）
-var gcalRefreshTimer = null; // 保留宣告避免 stopGcalRefresh 報錯，但不再啟動
+// 【X1 改進】gcalRefreshTimer 已整合進 tokenRefreshTimer
+var gcalRefreshTimer = null;   // 保留以支持升級相容（已由 tokenRefreshTimer 取代）
 
 function startTokenRefresh() {
   stopTokenRefresh();
@@ -1096,17 +1095,14 @@ function startTokenRefresh() {
 
 function stopTokenRefresh() {
   if (tokenRefreshTimer) { clearInterval(tokenRefreshTimer); tokenRefreshTimer = null; }
+  // 【改進】整合清理舊的 gcalRefreshTimer（升級相容，避免殘留）
+  if (gcalRefreshTimer) { clearInterval(gcalRefreshTimer); gcalRefreshTimer = null; }
 }
 
-// 【廢除】startGcalRefresh / stopGcalRefresh 改為空殼，避免呼叫報錯
-// GCal 刷新邏輯已整合進 startTokenRefresh
-function startGcalRefresh() {
-  // 廢除：邏輯已移入 startTokenRefresh，不再啟動獨立 timer
-  console.log('[GCal] startGcalRefresh 已廢除，由 startTokenRefresh 統一管理');
-}
+// 【相容性別名】stopGcalRefresh 已整合進 stopTokenRefresh
 function stopGcalRefresh() {
-  // 保留清除舊 timer 的能力（避免升級過渡期殘留）
-  if (gcalRefreshTimer) { clearInterval(gcalRefreshTimer); gcalRefreshTimer = null; }
+  // 保持相容性，直接調用 stopTokenRefresh
+  stopTokenRefresh();
 }
 
 // 純背景靜默刷新（不彈視窗，只回傳 success/fail callback）
@@ -1178,7 +1174,6 @@ function handleAuthError(err) {
   stopDataListeners();
   stopIdleTimer();
   stopTokenRefresh();
-  stopGcalRefresh();
   // 執行 Firebase signOut，觸發 onAuthStateChanged(null) 做清理
   if (auth) {
     auth.signOut().catch(function() {});
@@ -1251,8 +1246,32 @@ async function initFirebase(config) {
 }
 
 function onAuthStateChanged(user) {
-  currentUser = user;
   if (user) {
+    // 【X1 關鍵修復】帳號切換時清理舊帳號的狀態
+    // 必須在設定新 currentUser 前執行
+    if (currentUser && currentUser.uid !== user.uid) {
+      // 清理舊帳號的 GCal 狀態
+      var oldUser = currentUser;
+      console.log('[Auth] 帳號切換偵測：從', oldUser.uid, '切換到', user.uid);
+      
+      // 臨時保存舊帳號，用於清理其狀態
+      var tempUser = currentUser;
+      
+      // 清理舊帳號的授權狀態
+      // 使用舊帳號的 UID 清理
+      gcalRemove('sb_gcal_token');
+      gcalRemove('sb_gcal_expiry');
+      gcalRemove(GCAL_SYNC_KEY);
+      gcalRemove(GCAL_ENABLED_KEY);
+      gcalRemove(GCAL_DISABLED_KEY);
+      gcalRemove(GCAL_DENIED_KEY);
+      
+      console.log('[Auth] 已清理舊帳號', oldUser.uid, '的所有狀態');
+    }
+    
+    // 設定新帳號
+    currentUser = user;
+    
     // 【X1 Plan】登入時初始化 IndexedDB
     idbInit().then(function(ready) {
       console.log('[IDB] IndexedDB 初始化狀態:', ready);
@@ -1260,11 +1279,7 @@ function onAuthStateChanged(user) {
     
     // ⚠️ loginOverlay 不在這裡隱藏，等 checkUserGroup 完成後才隱藏
     // 避免登入驗證期間主畫面短暫可見
-    if (!gcalLoginInProgress) {
-      gcalHandleAuthStateChange(user);
-    } else {
-      console.log('[GCal] 登入進行中，onAuthStateChanged 跳過 GCal 處理');
-    }
+    gcalHandleAuthStateChange(user);
     var userInfo = document.getElementById('userInfo');
     var userName = document.getElementById('userName');
     var userAvatar = document.getElementById('userAvatar');
@@ -1278,7 +1293,6 @@ function onAuthStateChanged(user) {
     startIdleTimer();
     checkIdleTimeout();
     startTokenRefresh();
-    // startGcalRefresh() 已廢除，GCal 刷新邏輯已整合進 startTokenRefresh
     updateGcalWidget();
     checkUserGroup(); // 完成後才隱藏 loginOverlay
   } else {
@@ -1290,6 +1304,9 @@ function onAuthStateChanged(user) {
       return;
     }
 
+    // 【X1 關鍵修復】在 currentUser 被設為 null 前，保存舊帳號的 UID
+    var logoutUser = currentUser;
+    
     document.getElementById('loginOverlay').style.display = 'flex';
     var mainContent = document.getElementById('mainContent');
     if (mainContent) mainContent.style.display = 'none'; // 隱藏主畫面
@@ -1301,18 +1318,31 @@ function onAuthStateChanged(user) {
     if (drawerAuthBtn) { drawerAuthBtn.innerHTML = '👤 登入'; }
     stopIdleTimer();
     stopTokenRefresh();
-    stopGcalRefresh();
     localStorage.removeItem(IDLE_KEY);
     
-    // 【X1】登出時清理 GCal 的記憶體變數（保留 IndexedDB 的授權狀態永久記錄）
-    // 下次登入時，若 localStorage 被清，IndexedDB 會自動恢復狀態
-    // 防止下一個使用者誤用前一個帳號的 token
+    // 【X1 修復】登出時的授權狀態處理
+    // 清理記憶體變數
     gcalAccessToken = null;
     gcalTokenExpiry = 0;
     gcalTokenClient = null;  // 確保背景任務停止
     
-    // 【X1】登出時不清理 IndexedDB，授權狀態永久保留
-    // 快取清理後重新登入會自動恢復
+    // 【重要】清理登出帳號的 token 和臨時狀態
+    // 使用 logoutUser（在 currentUser=null 前保存的值）
+    if (logoutUser && logoutUser.uid) {
+      // 臨時設定 currentUser 以便 gcalRemove 能生成正確的 key
+      currentUser = logoutUser;
+      
+      // 清理實際的 token（防止下一個帳號使用）
+      gcalRemove('sb_gcal_token');      // 清 token
+      gcalRemove('sb_gcal_expiry');     // 清 expiry
+      gcalRemove(GCAL_SYNC_KEY);        // 清同步 email
+      
+      console.log('[GCal] 登出時清理 token 和臨時狀態（UID:', logoutUser.uid + '）');
+    }
+    
+    // 現在才設為 null
+    currentUser = null;
+    
     updateGcalWidget();
     stopDataListeners();
     currentGroupId = null;
@@ -1591,7 +1621,6 @@ async function leaveGroup() {
 var signInRetryCount = 0;
 var MAX_SIGN_IN_RETRY = 2;
 var signInInProgress = false; // 標記登入進行中，防止 onAuthStateChanged(null) 誤觸發
-var gcalLoginInProgress = false; // 標記 GCal 登入進行中，防止 onAuthStateChanged 重複處理
 
 function signInWithGoogle() {
   if (!auth) { toast('請先完成 Firebase 設定', '⚠️'); openFirebaseConfig(); return; }
@@ -1639,7 +1668,6 @@ function signInWithGoogle() {
   auth.signInWithPopup(provider)
     .then(function(result) {
       signInInProgress = false; // 清除旗標
-      gcalLoginInProgress = false; // 清除 GCal 標記
       signInRetryCount = 0;
       if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
       if (!result || !result.user) return;
@@ -1657,18 +1685,22 @@ function signInWithGoogle() {
         gcalAccessToken = result.credential.accessToken;
         gcalTokenExpiry = Date.now() + 55 * 60 * 1000;
         
-        // 臨時將 currentUser 設為新用戶，確保 gcalSet 使用正確的 UID
-        var prevUser = currentUser;
-        currentUser = result.user;
-        
-        gcalSet('sb_gcal_token', gcalAccessToken);
-        gcalSet('sb_gcal_expiry', gcalTokenExpiry.toString());
-        gcalSet(GCAL_ENABLED_KEY, '1');
-        gcalSet(GCAL_SYNC_KEY, email);
-        gcalRemove(GCAL_DENIED_KEY);
-        gcalRemove(GCAL_DISABLED_KEY);
-        
-        currentUser = prevUser; // 恢復 currentUser（onAuthStateChanged 會設定正確值）
+        // 使用 result.user.uid 直接寫入，不依賴 currentUser 的狀態
+        // （onAuthStateChanged 可能已觸發，也可能尚未觸發）
+        var uidKey = function(base) { return base + '_' + result.user.uid; };
+        localStorage.setItem(uidKey('sb_gcal_token'), gcalAccessToken);
+        localStorage.setItem(uidKey('sb_gcal_expiry'), gcalTokenExpiry.toString());
+        localStorage.setItem(uidKey(GCAL_ENABLED_KEY), '1');
+        localStorage.setItem(uidKey(GCAL_SYNC_KEY), email);
+        localStorage.removeItem(uidKey(GCAL_DENIED_KEY));
+        localStorage.removeItem(uidKey(GCAL_DISABLED_KEY));
+        // 同步寫入 IndexedDB
+        idbSetAsync(uidKey('sb_gcal_token'), gcalAccessToken);
+        idbSetAsync(uidKey('sb_gcal_expiry'), gcalTokenExpiry.toString());
+        idbSetAsync(uidKey(GCAL_ENABLED_KEY), '1');
+        idbSetAsync(uidKey(GCAL_SYNC_KEY), email);
+        idbRemoveAsync(uidKey(GCAL_DENIED_KEY));
+        idbRemoveAsync(uidKey(GCAL_DISABLED_KEY));
         console.log('[GCal] 登入取得 token，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
       } else if (hasEnabled && localStorage.getItem(disabledKey) !== '1') {
         // 曾授權但這次沒拿到 token（Google 不再給，需靜默刷新）
@@ -1679,7 +1711,6 @@ function signInWithGoogle() {
     })
     .catch(function(err) {
       signInInProgress = false; // 清除標記（登入失敗）
-      gcalLoginInProgress = false; // 清除旗標
       if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
       signInRetryCount++;
       var code = err.code || '';
@@ -1872,8 +1903,6 @@ function stopDataListeners() {
 }
 
 // ── 資料操作 ──
-async function save() {}
-
 async function dbSetTeacher(t) {
   if (!db || !currentUser || !currentGroupId) return;
   var data = Object.assign({}, t); var id = data.id; delete data.id;
@@ -2312,17 +2341,37 @@ function gcalHandleAuthStateChange(user) {
   console.log('uid:', user.uid);
 
   // ════════════════════════════════════════════════════════════════════════════
-  // 【X1 關鍵】快取恢復邏輯：localStorage.clear() 後從 IndexedDB 恢復授權狀態
+  // 【X1 關鍵】帳號切換時清理舊帳號的狀態（防止跨帳號污染）
   // ════════════════════════════════════════════════════════════════════════════
   
-  // 【X1】遷移 anon key → uid key（向下相容，確保 anon 用戶授權的 token 能遷移）
-  // gcalKey() 依賴 currentUser.uid，在 onAuthStateChanged 中 currentUser 還是舊值
-  // 所以需要臨時設定 currentUser，確保 gcalSet/gcalGet 用正確的新 UID
-  var prevUser = currentUser;
-  currentUser = user;
+  // 如果 currentUser 存在且與新 user 不同，說明是帳號切換
+  // 清理舊帳號在 localStorage 中的授權狀態
+  if (currentUser && currentUser.uid !== user.uid) {
+    // 臨時設定 currentUser 為舊帳號，以便 gcalRemove 清理舊帳號的狀態
+    var oldUser = currentUser;
+    currentUser = oldUser;
+    
+    // 清理舊帳號的 token 和臨時狀態（但保留授權標記供快取恢復用）
+    console.log('[GCal] 帳號切換偵測：清理舊帳號', oldUser.uid, '的 token');
+    gcalRemove('sb_gcal_token');
+    gcalRemove('sb_gcal_expiry');
+    gcalRemove(GCAL_SYNC_KEY);
+    
+    // 清理舊帳號的授權標記（防止新帳號繼承）
+    // 【重點】必須清理 ENABLED_KEY，否則新帳號會被當作「曾授權」
+    gcalRemove(GCAL_ENABLED_KEY);
+    gcalRemove(GCAL_DISABLED_KEY);
+    gcalRemove(GCAL_DENIED_KEY);
+  }
 
-  // 【X1 新增】快取清理後的恢復：如果 localStorage 沒有但 IndexedDB 有，恢復狀態
-  // 這是快取清理問題的根本解決方案
+  // ════════════════════════════════════════════════════════════════════════════
+  // 【X1】快取恢復邏輯：localStorage.clear() 後從 IndexedDB 恢復授權狀態
+  // ════════════════════════════════════════════════════════════════════════════
+  
+  // 此時 currentUser 已由 onAuthStateChanged 設定為新帳號（user）
+  // gcalKey() 會自動使用 currentUser.uid，無需手動切換
+
+  // 遷移 anon key → uid key（向下相容）
   var idbDisabledKey = GCAL_DISABLED_KEY + '_' + user.uid;
   var idbDeniedKey = GCAL_DENIED_KEY + '_' + user.uid;
   var idbEnabledKey = GCAL_ENABLED_KEY + '_' + user.uid;
@@ -2375,9 +2424,9 @@ function gcalHandleAuthStateChange(user) {
     localStorage.removeItem('sb_gcal_expiry_anon');
   }
 
-  currentUser = prevUser; // 恢復 currentUser（onAuthStateChanged 會立刻重新設定）
+  currentUser = user; // 確保 gcalKey() 使用正確的 UID（gcalHandleAuthStateChange 接收 user 參數）
 
-  var storedToken      = gcalGet('sb_gcal_token');  // 使用 gcalKey() 隔離 UID
+  var storedToken      = gcalGet('sb_gcal_token');
   var storedExpiry     = parseInt(gcalGet('sb_gcal_expiry') || '0', 10);
   var hasEverEnabled   = gcalGet(GCAL_ENABLED_KEY)  === '1';
   var isDisabled       = gcalGet(GCAL_DISABLED_KEY) === '1';
@@ -2385,12 +2434,17 @@ function gcalHandleAuthStateChange(user) {
 
   console.log('曾授權:', hasEverEnabled, '| 已關閉:', isDisabled, '| 已拒絕:', isDenied);
 
-  // 【X1】判斷 A：從未授權 或 主動關閉 或 曾拒絕 → 不觸發任何授權
-  // IndexedDB 中的授權狀態永久保留，即使 localStorage 清除也不會丟失
+  // 【X1 修復】判斷 A：加入額外防護 - 確認該帳號曾經授權過
+  // 防止多帳號場景下前一個帳號的授權狀態被誤用
+  // 規則：
+  // 1. 從未授權（hasEverEnabled = false）→ 不觸發
+  // 2. 曾授權但已關閉（DISABLED = true）→ 不觸發
+  // 3. 曾授權但被拒絕（DENIED = true）→ 不觸發
+  // 4. 曾授權且未關閉也未拒絕 → 可能需要刷新 token
   if (!hasEverEnabled || isDisabled || isDenied) {
     gcalAccessToken = null;
     gcalTokenExpiry = 0;
-    console.log('→ 不觸發授權（原因：未授權/已關閉/已拒絕，狀態存儲在 IndexedDB）');
+    console.log('→ 不觸發授權（原因：未授權/已關閉/已拒絕）');
     console.groupEnd();
     return;
   }
@@ -4727,7 +4781,7 @@ window.addEventListener('load', async function() {
 // ── 匯入/匯出（CSV only，雲端同步由 Firestore 負責）──
 let syncPendingData = null;
 
-function openSyncModal() { /* removed - no longer needed */ }
+// openSyncModal 已移除，同步功能改由 importOverlay 處理
 
 function exportConfig() {
   var config = { version: 2, exportedAt: new Date().toISOString(), teachers: teachers, bookings: bookings };
@@ -4777,7 +4831,7 @@ async function importConfig() {
   showConfirm('確認匯入', '確定要匯入？這將覆蓋雲端所有老師與預約資料，<strong>無法復原</strong>。', async function() {
     try {
       await dbBatchImport(syncPendingData.teachers, syncPendingData.bookings);
-      closeModal('syncOverlay');
+      closeModal('importOverlay');
       toast('匯入成功！' + syncPendingData.teachers.length + ' 位老師、' + syncPendingData.bookings.length + ' 筆預約', '✅');
     } catch(e) { toast('匯入失敗：'+e.message,'⚠️'); }
   });
