@@ -453,7 +453,7 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
         <button class="view-btn" id="btnCalendar" onclick="switchViewBtn('calendar')">月曆</button>
       </div>
     </div>
-    <div class="content" id="mainContent"></div>
+    <div class="content" id="mainContent" style="display:none"></div>
   </main>
 </div>
 
@@ -963,10 +963,8 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
     </div>
   </div>
 </div>
-<script>
-// ── 修正：在全域範圍最上方定義此變數，避免 ReferenceError ──
-var gcalLoginInProgress = false;
 
+<script>
 // ── Firebase 設定 ──
 // ▼▼▼ 將你的 Firebase 設定填入此處，填好後用戶永遠不需要手動設定 ▼▼▼
 var BUILT_IN_FIREBASE_CONFIG = {
@@ -990,7 +988,6 @@ var currentUser = null;
 var currentGroupId = null;
 var unsubscribeTeachers = null;
 var unsubscribeBookings = null;
-
 
 // ── 閒置自動登出（1天）──
 var IDLE_TIMEOUT = 5 * 60 * 60 * 1000; // 5小時閒置自動登出
@@ -1276,11 +1273,21 @@ function onAuthStateChanged(user) {
     startIdleTimer();
     checkIdleTimeout();
     startTokenRefresh();
-    startGcalRefresh(); // GCal token 背景排程
+    // startGcalRefresh() 已廢除，GCal 刷新邏輯已整合進 startTokenRefresh
     updateGcalWidget();
     checkUserGroup(); // 完成後才隱藏 loginOverlay
   } else {
+    // 用戶登出（或登入失敗）
+    // 【保護】如果目前在登入流程中（signInWithPopup 進行中），忽略這個 null 狀態
+    // 讓 .then/.catch 區塊統一處理，避免誤觸發登出視窗
+    if (signInInProgress) {
+      console.log('[Auth] 登入進行中，忽略 onAuthStateChanged(null)');
+      return;
+    }
+
     document.getElementById('loginOverlay').style.display = 'flex';
+    var mainContent = document.getElementById('mainContent');
+    if (mainContent) mainContent.style.display = 'none'; // 隱藏主畫面
     var userInfo = document.getElementById('userInfo');
     var authBtn = document.getElementById('authBtn');
     var drawerAuthBtn = document.getElementById('drawerAuthBtn');
@@ -1291,9 +1298,15 @@ function onAuthStateChanged(user) {
     stopTokenRefresh();
     stopGcalRefresh();
     localStorage.removeItem(IDLE_KEY);
-    // token 保留在 localStorage，重新登入後可直接使用，不需重新授權
-    gcalAccessToken = null; // 只清除記憶體變數
+    
+    // 【修復】登出時清理 GCal 的記憶體變數（但保留 localStorage 的歷史紀錄）
+    // 防止下一個使用者誤用前一個帳號的 token
+    gcalAccessToken = null;
     gcalTokenExpiry = 0;
+    
+    // 【新增】確保 gcalTokenClient 也被重置（防止背景任務繼續執行）
+    gcalTokenClient = null;
+    
     updateGcalWidget();
     stopDataListeners();
     currentGroupId = null;
@@ -1312,15 +1325,16 @@ function onAuthStateChanged(user) {
 // ── 群組管理 ──
 async function checkUserGroup() {
   if (!db || !currentUser) return;
-  // 顯示載入中提示（loginOverlay 繼續顯示）
   var statusEl = document.getElementById('loginStatus');
+  var mainContent = document.getElementById('mainContent');
   if (statusEl) statusEl.textContent = '驗證身份中，請稍候…';
   try {
     var snap = await db.collection('groups')
       .where('memberUIDs', 'array-contains', currentUser.uid)
       .limit(1).get();
-    // 驗證完成，才隱藏 loginOverlay
+    // 驗證成功，隱藏登入頁 + 顯示主畫面
     document.getElementById('loginOverlay').style.display = 'none';
+    if (mainContent) mainContent.style.display = ''; // 顯示主畫面
     if (statusEl) statusEl.textContent = '';
     if (!snap.empty) {
       var doc = snap.docs[0];
@@ -1334,7 +1348,8 @@ async function checkUserGroup() {
     console.error('checkUserGroup error:', e);
     if (statusEl) statusEl.textContent = '載入群組失敗，請確認網路後重新整理頁面';
     toast('載入群組失敗，請確認網路連線', '⚠️');
-    // 驗證失敗，保持 loginOverlay 顯示，讓使用者重試
+    // 驗證失敗，保持 loginOverlay 顯示，mainContent 隱藏
+    if (mainContent) mainContent.style.display = 'none';
   }
 }
 
@@ -1569,7 +1584,7 @@ async function leaveGroup() {
 
 var signInRetryCount = 0;
 var MAX_SIGN_IN_RETRY = 2;
-var gcalLoginInProgress = false; // 正在執行 signInWithPopup，onAuthStateChanged 應跳過 GCal 處理
+var signInInProgress = false; // 標記登入進行中，防止 onAuthStateChanged(null) 誤觸發
 
 function signInWithGoogle() {
   if (!auth) { toast('請先完成 Firebase 設定', '⚠️'); openFirebaseConfig(); return; }
@@ -1577,6 +1592,13 @@ function signInWithGoogle() {
   var loginBtn = document.querySelector('#loginOverlay button[onclick*="handleAuth"]');
   statusEl.textContent = '登入中，請稍候…';
   if (loginBtn) { loginBtn.disabled = true; loginBtn.style.opacity = '0.6'; }
+
+  // 【修復】新登入前先清理前一個帳號的 GCal 記憶體變數
+  // 確保多帳號切換時不會有舊帳號 token 的污染
+  gcalAccessToken = null;
+  gcalTokenExpiry = 0;
+  gcalTokenClient = null;
+  console.log('[GCal] 登入前清理前一帳號的 GCal 狀態');
 
   var provider = new firebase.auth.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
@@ -1600,13 +1622,13 @@ function signInWithGoogle() {
     console.log('[GCal] 未曾授權或已關閉，不申請 Calendar scope');
   }
 
-  // 標記登入進行中：onAuthStateChanged 看到這個旗標會跳過 GCal 處理
-  // 讓 signInWithPopup.then() 統一負責 token 更新
-  gcalLoginInProgress = true;
+  // 標記登入進行中：防止 onAuthStateChanged 在登入過程中誤觸發 null 狀態
+  signInInProgress = true;
 
   auth.signInWithPopup(provider)
     .then(function(result) {
-      gcalLoginInProgress = false; // 清除旗標
+      signInInProgress = false; // 清除旗標
+      gcalLoginInProgress = false; // 清除 GCal 標記
       signInRetryCount = 0;
       if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
       if (!result || !result.user) return;
@@ -1619,15 +1641,25 @@ function signInWithGoogle() {
       var hasEnabled  = localStorage.getItem(enabledKey) === '1';
 
       if (result.credential && result.credential.accessToken) {
-        // 拿到 accessToken（首次授權 或 重新授權）
+        // 【修復】改用 gcalSet/gcalKey 存儲，確保 UID 隔離
+        // 不再直接用 'sb_gcal_token_' + uid，而是讓 gcalKey() 統一管理
         gcalAccessToken = result.credential.accessToken;
         gcalTokenExpiry = Date.now() + 55 * 60 * 1000;
-        localStorage.setItem('sb_gcal_token_'  + uid, gcalAccessToken);
-        localStorage.setItem('sb_gcal_expiry_' + uid, gcalTokenExpiry.toString());
-        localStorage.setItem(enabledKey, '1');
-        localStorage.setItem(GCAL_SYNC_KEY + '_' + uid, email);
-        localStorage.removeItem(deniedKey);
-        localStorage.removeItem(disabledKey);
+        
+        // 使用 currentUser 已被設定的情況（onAuthStateChanged 會在 signInWithPopup 後觸發）
+        // 但為了確保 uid 正確，還是用 result.user.uid
+        // 臨時將 currentUser 設為新用戶以便 gcalSet 使用
+        var prevUser = currentUser;
+        currentUser = result.user;
+        
+        gcalSet('sb_gcal_token', gcalAccessToken);
+        gcalSet('sb_gcal_expiry', gcalTokenExpiry.toString());
+        gcalSet(GCAL_ENABLED_KEY, '1');
+        gcalSet(GCAL_SYNC_KEY, email);
+        gcalRemove(GCAL_DENIED_KEY);
+        gcalRemove(GCAL_DISABLED_KEY);
+        
+        currentUser = prevUser; // 恢復 currentUser（onAuthStateChanged 會設定正確值）
         console.log('[GCal] 登入取得 token，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
       } else if (hasEnabled && localStorage.getItem(disabledKey) !== '1') {
         // 曾授權但這次沒拿到 token（Google 不再給，需靜默刷新）
@@ -1637,6 +1669,7 @@ function signInWithGoogle() {
       // 從未授權的情況：什麼都不做，等用戶進設定頁
     })
     .catch(function(err) {
+      signInInProgress = false; // 清除標記（登入失敗）
       gcalLoginInProgress = false; // 清除旗標
       if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
       signInRetryCount++;
@@ -2269,35 +2302,44 @@ function gcalHandleAuthStateChange(user) {
   console.group('[GCal] 登入後 token 狀態檢查');
   console.log('uid:', user.uid);
 
-  // 遷移 anon key → uid key（保持向下相容）
+  // 【修復】遷移 anon key → uid key（保持向下相容，但用 gcalKey() 確保隔離）
+  // 臨時設定 currentUser 以便 gcalSet/gcalGet 能正確使用 user.uid
+  var prevUser = currentUser;
+  currentUser = user;
+
   var anonDenied = localStorage.getItem(GCAL_DENIED_KEY + '_anon');
   if (anonDenied) {
-    localStorage.setItem(GCAL_DENIED_KEY + '_' + user.uid, anonDenied);
+    gcalSet(GCAL_DENIED_KEY, anonDenied);
     localStorage.removeItem(GCAL_DENIED_KEY + '_anon');
   }
   var anonToken = localStorage.getItem('sb_gcal_token_anon');
   if (anonToken) {
     var anonExpiry = localStorage.getItem('sb_gcal_expiry_anon');
-    if (!localStorage.getItem('sb_gcal_token_' + user.uid)) {
-      localStorage.setItem('sb_gcal_token_'  + user.uid, anonToken);
-      localStorage.setItem('sb_gcal_expiry_' + user.uid, anonExpiry || '0');
+    // 只在該 UID 尚未有 token 時才遷移
+    if (!gcalGet('sb_gcal_token')) {
+      gcalSet('sb_gcal_token', anonToken);
+      gcalSet('sb_gcal_expiry', anonExpiry || '0');
     }
     localStorage.removeItem('sb_gcal_token_anon');
     localStorage.removeItem('sb_gcal_expiry_anon');
   }
 
-  var storedToken      = localStorage.getItem('sb_gcal_token_' + user.uid);
-  var storedExpiry     = parseInt(localStorage.getItem('sb_gcal_expiry_' + user.uid) || '0', 10);
+  currentUser = prevUser; // 恢復 currentUser（實際的 auth state change 會重新設定）
+
+  var storedToken      = gcalGet('sb_gcal_token');  // 使用 gcalKey() 隔離 UID
+  var storedExpiry     = parseInt(gcalGet('sb_gcal_expiry') || '0', 10);
   var hasEverEnabled   = gcalGet(GCAL_ENABLED_KEY)  === '1';
   var isDisabled       = gcalGet(GCAL_DISABLED_KEY) === '1';
+  var isDenied         = gcalGet(GCAL_DENIED_KEY)   === '1';
 
-  console.log('曾授權:', hasEverEnabled, '| 已關閉:', isDisabled);
+  console.log('曾授權:', hasEverEnabled, '| 已關閉:', isDisabled, '| 已拒絕:', isDenied);
 
-  // 判斷 A：從未授權 或 主動關閉 → 不觸發任何授權
-  if (!hasEverEnabled || isDisabled) {
+  // 【修復】判斷 A：從未授權 或 主動關閉 或 曾拒絕 → 不觸發任何授權
+  // 即使快取被清也保持「已關閉/已拒絕」的狀態，防止誤觸發重新授權
+  if (!hasEverEnabled || isDisabled || isDenied) {
     gcalAccessToken = null;
     gcalTokenExpiry = 0;
-    console.log('→ 不觸發授權');
+    console.log('→ 不觸發授權（原因：未授權/已關閉/已拒絕）');
     console.groupEnd();
     return;
   }
@@ -2463,8 +2505,19 @@ function getGcalSyncEmail() {
   return gcalGet(GCAL_SYNC_KEY) || '';
 }
 function isGcalSyncAccount() {
+  // 【修復】不只檢查 email，還要檢查該 UID 是否真的有授權
+  // 防止多帳號場景下，前一個帳號的 email 還存著導致誤認為已授權
+  if (!currentUser) return false;
   var e = getGcalSyncEmail();
-  return !!(e && currentUser && currentUser.email === e);
+  // 必須同時滿足：
+  // 1. email 匹配（確認是同一個帳號）
+  // 2. 該 UID 曾授權過（GCAL_ENABLED_KEY = '1'）
+  // 3. 該 UID 沒有關閉（GCAL_DISABLED_KEY ≠ '1'）
+  // 4. 該 UID 沒有拒絕（GCAL_DENIED_KEY ≠ '1'）
+  var hasAuth = gcalGet(GCAL_ENABLED_KEY) === '1';
+  var isDisabled = gcalGet(GCAL_DISABLED_KEY) === '1';
+  var isDenied = gcalGet(GCAL_DENIED_KEY) === '1';
+  return !!(e && currentUser.email === e && hasAuth && !isDisabled && !isDenied);
 }
 function initGcalClient() {
   if (!window.google || !window.google.accounts) {
