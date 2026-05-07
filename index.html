@@ -992,13 +992,19 @@ var unsubscribeBookings = null;
 // ── 閒置自動登出（1天）──
 var IDLE_TIMEOUT = 5 * 60 * 60 * 1000; // 5小時閒置自動登出
 var IDLE_KEY = 'sb_last_active';
-var TOKEN_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 分鐘（Firebase token 1小時過期，提前 10 分鐘刷新）
+var TOKEN_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 分鐘主動刷新 Firebase token
 var tokenRefreshTimer = null;
 var idleTimer = null;
 var idleCheckTimer = null;
 
+// ── 背景鎖：使用計數器（而非 boolean）支援多個非同步任務並行 ──
+// 【改動說明】原本 _bgTaskRunning 是 boolean，多個並行非同步任務時可能提前被設為 false
+// 改為計數器：每個背景任務開始時 ++，完成時 --，全部完成才歸零
+var _bgTaskCount = 0;
+
 function resetIdleTimer() {
-  // 每次有操作就更新 localStorage 的時間戳
+  // 有任何背景任務執行中就忽略，不更新閒置時間戳
+  if (_bgTaskCount > 0) return;
   localStorage.setItem(IDLE_KEY, Date.now().toString());
 }
 
@@ -1006,43 +1012,84 @@ function checkIdleTimeout() {
   if (!currentUser) return;
   var last = parseInt(localStorage.getItem(IDLE_KEY) || '0', 10);
   if (last > 0 && Date.now() - last > IDLE_TIMEOUT) {
+    console.warn('[Idle] 閒置超過限制，執行自動登出');
+    // Bug Fix #2: 登出前先停止所有背景任務，確保不再有背景操作
+    stopTokenRefresh();
+    stopGcalRefresh();
     auth.signOut();
     toast('閒置超過 5 小時，已自動登出', '🔕');
   }
 }
 
 function startIdleTimer() {
-  // 記錄目前時間
   localStorage.setItem(IDLE_KEY, Date.now().toString());
-  // 監聽使用者操作，更新時間戳
-  ['click','keydown','touchstart','scroll'].forEach(function(ev) {
+  // Bug Fix #3: 防止重複綁定（先 remove 再 add）
+  ['click','keydown','touchstart','scroll','pointerdown'].forEach(function(ev) {
+    document.removeEventListener(ev, resetIdleTimer);
     document.addEventListener(ev, resetIdleTimer, { passive: true });
   });
-  // 每 5 分鐘檢查一次是否超過 24 小時未操作
+  // Bug Fix #4: 間隔從 5 分鐘縮短為 1 分鐘，讓閒置判定更精準
   if (idleCheckTimer) clearInterval(idleCheckTimer);
-  idleCheckTimer = setInterval(checkIdleTimeout, 5 * 60 * 1000);
+  idleCheckTimer = setInterval(checkIdleTimeout, 60 * 1000);
 }
 
 function stopIdleTimer() {
-  ['click','keydown','touchstart','scroll'].forEach(function(ev) {
+  ['click','keydown','touchstart','scroll','pointerdown'].forEach(function(ev) {
     document.removeEventListener(ev, resetIdleTimer);
   });
   if (idleCheckTimer) { clearInterval(idleCheckTimer); idleCheckTimer = null; }
 }
 
-// ── Firebase Token 自動刷新機制 ──
-// Firebase ID token 每 1 小時過期，SDK 背景刷新，但網路異常時可能失敗
-// 每 50 分鐘主動呼叫 getIdToken(true) 強制刷新，失敗則自動登出
+// ── Firebase Token 自動刷新（純背景，不觸發閒置重置）──
+// ── 統一背景 Token 刷新循環 ──
+// 【改動說明】
+// 原本 startTokenRefresh（Firebase）和 startGcalRefresh（GCal）是兩個獨立的 setInterval
+// 會導致狀態脫鉤：Firebase 已失效但 GCal 還在嘗試刷新
+// 現在合併成一個循環，邏輯順序：
+//   1. Firebase getIdToken(true) → 成功才進行下一步
+//   2. 檢查 GCal token 剩餘時間 → 即將過期才靜默刷新
+// 使用 _bgTaskCount 計數器鎖（而非 boolean），支援多個非同步任務並行
+
+// 【廢除】gcalRefreshTimer 獨立 setInterval（改由 tokenRefreshTimer 統一管理）
+var gcalRefreshTimer = null; // 保留宣告避免 stopGcalRefresh 報錯，但不再啟動
 
 function startTokenRefresh() {
   stopTokenRefresh();
   tokenRefreshTimer = setInterval(function() {
     if (!currentUser || !auth) return;
+
+    // 步驟一：Firebase token 刷新（背景計數器加一，不觸發閒置重置）
+    _bgTaskCount++;
     currentUser.getIdToken(true).then(function() {
-      console.log('[Auth] Token 刷新成功');
+      console.log('[Auth] Firebase Token 刷新成功');
+
+      // 步驟二：Firebase 成功後才檢查 GCal（確保 Firebase 狀態有效）
+      if (!isGcalSyncAccount() || !gcalAccessToken) return;
+      // 只在距過期 5 分鐘內才實際刷新，避免不必要的請求
+      if (Date.now() < gcalTokenExpiry - 5 * 60 * 1000) return;
+
+      console.log('[GCal] Firebase 刷新後觸發 GCal 背景刷新');
+      _bgTaskCount++; // GCal 任務也加計數
+      gcalSilentRefreshBackground(function(success) {
+        _bgTaskCount--;
+        if (success) {
+          console.log('[GCal] 背景刷新成功');
+          updateGcalWidget();
+        } else {
+          // 背景失敗：清除 token，等使用者回到頁面或下次操作時提示
+          console.warn('[GCal] 背景刷新失敗，清除 token');
+          gcalAccessToken = null;
+          gcalTokenExpiry = 0;
+          updateGcalWidget();
+        }
+      });
+
     }).catch(function(err) {
-      console.error('[Auth] Token 刷新失敗，自動登出:', err.code);
+      // Firebase 刷新失敗：觸發統一錯誤處理（會 signOut）
+      console.error('[Auth] Firebase Token 刷新失敗:', err.code);
       handleAuthError(err);
+    }).finally(function() {
+      _bgTaskCount--; // Firebase 任務完成
     });
   }, TOKEN_REFRESH_INTERVAL);
 }
@@ -1050,6 +1097,72 @@ function startTokenRefresh() {
 function stopTokenRefresh() {
   if (tokenRefreshTimer) { clearInterval(tokenRefreshTimer); tokenRefreshTimer = null; }
 }
+
+// 【廢除】startGcalRefresh / stopGcalRefresh 改為空殼，避免呼叫報錯
+// GCal 刷新邏輯已整合進 startTokenRefresh
+function startGcalRefresh() {
+  // 廢除：邏輯已移入 startTokenRefresh，不再啟動獨立 timer
+  console.log('[GCal] startGcalRefresh 已廢除，由 startTokenRefresh 統一管理');
+}
+function stopGcalRefresh() {
+  // 保留清除舊 timer 的能力（避免升級過渡期殘留）
+  if (gcalRefreshTimer) { clearInterval(gcalRefreshTimer); gcalRefreshTimer = null; }
+}
+
+// 純背景靜默刷新（不彈視窗，只回傳 success/fail callback）
+function gcalSilentRefreshBackground(callback) {
+  if (!window.google || !window.google.accounts) { callback(false); return; }
+  if (!gcalTokenClient) initGcalClient();
+  if (!gcalTokenClient) { callback(false); return; }
+  var done = false;
+  var timer = setTimeout(function() {
+    if (!done) { done = true; callback(false); }
+  }, 15000);
+  var prev = gcalPendingAction;
+  gcalPendingAction = function() {
+    if (!done) { done = true; clearTimeout(timer); callback(true); }
+    if (prev) prev();
+  };
+  gcalTokenClient.requestAccessToken({ prompt: '' });
+}
+
+// ── visibilitychange：使用者回到頁面時立即驗證所有 token ──
+// Bug Fix #6: 新增 visibilitychange，確保長時間離開後回來能立即偵測
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState !== 'visible' || !currentUser) return;
+  console.log('[Visibility] 使用者回到頁面，驗證 token 狀態');
+
+  // 先檢查閒置（使用者離開期間可能已超時）
+  checkIdleTimeout();
+  if (!currentUser) return; // 若已登出則停止
+
+  // 檢查 Firebase token（不計入閒置）
+  _bgTaskCount++;
+  currentUser.getIdToken(false).catch(function() {
+    return currentUser.getIdToken(true); // 嘗試強制刷新
+  }).catch(function(err) {
+    handleAuthError(err);
+  }).finally(function() {
+    _bgTaskCount--;
+  });
+
+  // 檢查 GCal token（若快過期則靜默刷新）
+  if (isGcalSyncAccount() && gcalAccessToken && Date.now() >= gcalTokenExpiry - 2 * 60 * 1000) {
+    _bgTaskCount++;
+    gcalSilentRefreshBackground(function(success) {
+      _bgTaskCount--;
+      if (success) {
+        updateGcalWidget();
+      } else {
+        gcalAccessToken = null;
+        gcalTokenExpiry = 0;
+        updateGcalWidget();
+        // 回到頁面時是合適的提示時機
+        toast('Google 日曆授權已過期，請前往「📅 日曆同步」重新授權', '⚠️');
+      }
+    });
+  }
+});
 
 // 統一的 auth 錯誤處理：先 signOut 再顯示登入畫面，確保狀態一致
 function handleAuthError(err) {
@@ -1065,6 +1178,7 @@ function handleAuthError(err) {
   stopDataListeners();
   stopIdleTimer();
   stopTokenRefresh();
+  stopGcalRefresh();
   // 執行 Firebase signOut，觸發 onAuthStateChanged(null) 做清理
   if (auth) {
     auth.signOut().catch(function() {});
@@ -1159,6 +1273,7 @@ function onAuthStateChanged(user) {
     startIdleTimer();
     checkIdleTimeout();
     startTokenRefresh();
+    startGcalRefresh(); // GCal token 背景排程
     updateGcalWidget();
     checkUserGroup(); // 完成後才隱藏 loginOverlay
   } else {
@@ -1171,6 +1286,7 @@ function onAuthStateChanged(user) {
     if (drawerAuthBtn) { drawerAuthBtn.innerHTML = '👤 登入'; }
     stopIdleTimer();
     stopTokenRefresh();
+    stopGcalRefresh();
     localStorage.removeItem(IDLE_KEY);
     // token 保留在 localStorage，重新登入後可直接使用，不需重新授權
     gcalAccessToken = null; // 只清除記憶體變數
@@ -2139,10 +2255,18 @@ function autoCalcDuration() {
 // 處理頁面重整或重新登入後的 GCal token 狀態
 // （signInWithPopup.then() 會跳過這裡，直接自己處理）
 function gcalHandleAuthStateChange(user) {
-  console.group('[GCal] 頁面載入/重整 token 狀態');
+  // 【改動說明】
+  // 原本邏輯：token 過期 → 直接呼叫 gcalSilentRefreshOrPrompt（20s 後才彈視窗）
+  // 新邏輯：
+  //   B. token 有效 → 直接使用（同原本）
+  //   C. token 過期 → 先嘗試背景靜默刷新（不彈視窗）
+  //      → 成功：無縫恢復，使用者完全感知不到（閒置登出後重新登入的最佳體驗）
+  //      → 失敗：降級為 gcalSilentRefreshOrPrompt（帶 20s timeout + 彈視窗）
+
+  console.group('[GCal] 登入後 token 狀態檢查');
   console.log('uid:', user.uid);
 
-  // 遷移 anon key 到 uid key
+  // 遷移 anon key → uid key（保持向下相容）
   var anonDenied = localStorage.getItem(GCAL_DENIED_KEY + '_anon');
   if (anonDenied) {
     localStorage.setItem(GCAL_DENIED_KEY + '_' + user.uid, anonDenied);
@@ -2159,15 +2283,14 @@ function gcalHandleAuthStateChange(user) {
     localStorage.removeItem('sb_gcal_expiry_anon');
   }
 
-  // 遷移後重新讀取（anon 遷移可能更新了值）
-  var storedToken  = localStorage.getItem('sb_gcal_token_' + user.uid);
-  var storedExpiry = parseInt(localStorage.getItem('sb_gcal_expiry_' + user.uid) || '0', 10);
-  var hasEverEnabled = gcalGet(GCAL_ENABLED_KEY)  === '1';
-  var isDisabled     = gcalGet(GCAL_DISABLED_KEY) === '1';
+  var storedToken      = localStorage.getItem('sb_gcal_token_' + user.uid);
+  var storedExpiry     = parseInt(localStorage.getItem('sb_gcal_expiry_' + user.uid) || '0', 10);
+  var hasEverEnabled   = gcalGet(GCAL_ENABLED_KEY)  === '1';
+  var isDisabled       = gcalGet(GCAL_DISABLED_KEY) === '1';
 
   console.log('曾授權:', hasEverEnabled, '| 已關閉:', isDisabled);
 
-  // 判斷 A：從未授權 或 主動關閉
+  // 判斷 A：從未授權 或 主動關閉 → 不觸發任何授權
   if (!hasEverEnabled || isDisabled) {
     gcalAccessToken = null;
     gcalTokenExpiry = 0;
@@ -2176,21 +2299,44 @@ function gcalHandleAuthStateChange(user) {
     return;
   }
 
-  // 判斷 B：token 有效
+  // 判斷 B：token 有效 → 直接恢復，不需要任何網路請求
   if (storedToken && Date.now() < storedExpiry) {
     gcalAccessToken = storedToken;
     gcalTokenExpiry = storedExpiry;
-    console.log('✅ token 有效，剩餘', Math.round((storedExpiry - Date.now())/60000), '分鐘');
+    console.log('✅ token 有效，剩餘', Math.round((storedExpiry - Date.now()) / 60000), '分鐘');
     console.groupEnd();
+    updateGcalWidget();
     return;
   }
 
-  // 判斷 C：token 過期 → 靜默刷新，失敗才提示
+  // 判斷 C：token 過期（含從未有過 token 的情況）
+  // 【新邏輯】先嘗試純背景靜默刷新（不彈視窗、不顯示任何 UI）
+  // 因為使用者的 Google 網頁 Session 通常仍有效，這個請求大多會成功
   gcalAccessToken = null;
   gcalTokenExpiry = 0;
-  console.log('→ token 過期，靜默刷新');
+  console.log('→ token 過期，嘗試背景靜默刷新（不彈視窗）');
   console.groupEnd();
-  gcalSilentRefreshOrPrompt(user.email);
+
+  _bgTaskCount++; // 標記為背景任務
+  gcalSilentRefreshBackground(function(success) {
+    _bgTaskCount--;
+    if (success) {
+      // 靜默刷新成功：使用者完全無感，直接恢復同步狀態
+      console.log('[GCal] ✅ 登入後靜默刷新成功，日曆同步已自動恢復');
+      updateGcalWidget();
+      if (!getGcalSyncEmail()) gcalSet(GCAL_SYNC_KEY, user.email);
+    } else {
+      // 靜默刷新失敗（Google Session 也已過期）→ 降級為帶提示的刷新
+      // 此時才使用原本的 gcalSilentRefreshOrPrompt（20s 後彈視窗提示重新授權）
+      console.warn('[GCal] 靜默刷新失敗，降級為帶提示流程');
+      updateGcalWidget(); // 先更新 widget 為未同步狀態
+      // 延遲 1 秒再執行，讓使用者先完成登入流程的 UI 渲染
+      setTimeout(function() {
+        if (!currentUser || !isGcalSyncAccount()) return;
+        gcalSilentRefreshOrPrompt(user.email);
+      }, 1000);
+    }
+  });
 }
 
 function gcalSilentRefreshOrPrompt(email) {
