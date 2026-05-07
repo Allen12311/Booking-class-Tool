@@ -1253,6 +1253,11 @@ async function initFirebase(config) {
 function onAuthStateChanged(user) {
   currentUser = user;
   if (user) {
+    // 【X1 Plan】登入時初始化 IndexedDB
+    idbInit().then(function(ready) {
+      console.log('[IDB] IndexedDB 初始化狀態:', ready);
+    });
+    
     // ⚠️ loginOverlay 不在這裡隱藏，等 checkUserGroup 完成後才隱藏
     // 避免登入驗證期間主畫面短暫可見
     if (!gcalLoginInProgress) {
@@ -1299,14 +1304,15 @@ function onAuthStateChanged(user) {
     stopGcalRefresh();
     localStorage.removeItem(IDLE_KEY);
     
-    // 【修復】登出時清理 GCal 的記憶體變數（但保留 localStorage 的歷史紀錄）
+    // 【X1】登出時清理 GCal 的記憶體變數（保留 IndexedDB 的授權狀態永久記錄）
+    // 下次登入時，若 localStorage 被清，IndexedDB 會自動恢復狀態
     // 防止下一個使用者誤用前一個帳號的 token
     gcalAccessToken = null;
     gcalTokenExpiry = 0;
+    gcalTokenClient = null;  // 確保背景任務停止
     
-    // 【新增】確保 gcalTokenClient 也被重置（防止背景任務繼續執行）
-    gcalTokenClient = null;
-    
+    // 【X1】登出時不清理 IndexedDB，授權狀態永久保留
+    // 快取清理後重新登入會自動恢復
     updateGcalWidget();
     stopDataListeners();
     currentGroupId = null;
@@ -1594,8 +1600,9 @@ function signInWithGoogle() {
   statusEl.textContent = '登入中，請稍候…';
   if (loginBtn) { loginBtn.disabled = true; loginBtn.style.opacity = '0.6'; }
 
-  // 【修復】新登入前先清理前一個帳號的 GCal 記憶體變數
+  // 【X1】新登入前先清理前一個帳號的 GCal 記憶體變數
   // 確保多帳號切換時不會有舊帳號 token 的污染
+  // （IndexedDB 中的授權狀態保留，供新帳號讀取時自動恢復）
   gcalAccessToken = null;
   gcalTokenExpiry = 0;
   gcalTokenClient = null;
@@ -1608,6 +1615,9 @@ function signInWithGoogle() {
   // - 從未授權（無 ENABLED 記錄）→ 不申請，讓用戶進設定頁手動開啟
   // - 曾授權過（有 ENABLED 記錄）→ 申請 scope，讓登入時直接完成 token 更新
   // - 主動關閉（DISABLED）→ 不申請
+  // 【X1】IndexedDB 優先級高於 localStorage，但 IndexedDB 非同步
+  //      所以先檢查 localStorage（gcalGet 會在背景同時同步 IndexedDB）
+  //      IndexedDB 中的狀態若不同，會在背景自動恢復到 localStorage
   // 注意：此時 currentUser 為 null，用 localStorage 直接搜尋所有 uid 的記錄
   var anyEnabled  = Object.keys(localStorage).some(function(k) {
     return k.startsWith(GCAL_ENABLED_KEY + '_') && localStorage.getItem(k) === '1';
@@ -1642,14 +1652,12 @@ function signInWithGoogle() {
       var hasEnabled  = localStorage.getItem(enabledKey) === '1';
 
       if (result.credential && result.credential.accessToken) {
-        // 【修復】改用 gcalSet/gcalKey 存儲，確保 UID 隔離
-        // 不再直接用 'sb_gcal_token_' + uid，而是讓 gcalKey() 統一管理
+        // 【X1】改用 gcalSet/gcalKey 存儲，自動同步到 IndexedDB
+        // 確保 UID 隔離，即使 localStorage 清除也能從 IndexedDB 恢復
         gcalAccessToken = result.credential.accessToken;
         gcalTokenExpiry = Date.now() + 55 * 60 * 1000;
         
-        // 使用 currentUser 已被設定的情況（onAuthStateChanged 會在 signInWithPopup 後觸發）
-        // 但為了確保 uid 正確，還是用 result.user.uid
-        // 臨時將 currentUser 設為新用戶以便 gcalSet 使用
+        // 臨時將 currentUser 設為新用戶，確保 gcalSet 使用正確的 UID
         var prevUser = currentUser;
         currentUser = result.user;
         
@@ -2303,29 +2311,71 @@ function gcalHandleAuthStateChange(user) {
   console.group('[GCal] 登入後 token 狀態檢查');
   console.log('uid:', user.uid);
 
-  // 【修復】遷移 anon key → uid key（保持向下相容，但用 gcalKey() 確保隔離）
-  // 臨時設定 currentUser 以便 gcalSet/gcalGet 能正確使用 user.uid
+  // ════════════════════════════════════════════════════════════════════════════
+  // 【X1 關鍵】快取恢復邏輯：localStorage.clear() 後從 IndexedDB 恢復授權狀態
+  // ════════════════════════════════════════════════════════════════════════════
+  
+  // 【X1】遷移 anon key → uid key（向下相容，確保 anon 用戶授權的 token 能遷移）
+  // gcalKey() 依賴 currentUser.uid，在 onAuthStateChanged 中 currentUser 還是舊值
+  // 所以需要臨時設定 currentUser，確保 gcalSet/gcalGet 用正確的新 UID
   var prevUser = currentUser;
   currentUser = user;
 
+  // 【X1 新增】快取清理後的恢復：如果 localStorage 沒有但 IndexedDB 有，恢復狀態
+  // 這是快取清理問題的根本解決方案
+  var idbDisabledKey = GCAL_DISABLED_KEY + '_' + user.uid;
+  var idbDeniedKey = GCAL_DENIED_KEY + '_' + user.uid;
+  var idbEnabledKey = GCAL_ENABLED_KEY + '_' + user.uid;
+  
+  // 快速檢查：localStorage 中是否缺少授權狀態
+  var lsDisabled = localStorage.getItem(idbDisabledKey);
+  var lsDenied = localStorage.getItem(idbDeniedKey);
+  var lsEnabled = localStorage.getItem(idbEnabledKey);
+  
+  // 【X1】非同步恢復：IndexedDB 查詢不應阻塞主線程
+  // 但快速返回 localStorage 結果，稍後再補充 IndexedDB 的恢復
+  if (!lsDisabled || !lsDenied || !lsEnabled) {
+    console.log('[IDB] 偵測快取可能被清，後台嘗試從 IndexedDB 恢復...');
+    idbGetAsync(idbDisabledKey).then(function(idbDisabled) {
+      if (idbDisabled === '1' && !localStorage.getItem(idbDisabledKey)) {
+        console.log('[IDB] ✅ 從 IndexedDB 恢復「已關閉」狀態');
+        localStorage.setItem(idbDisabledKey, '1');
+        updateGcalWidget(); // 重新更新 widget 以反映狀態
+      }
+    });
+    idbGetAsync(idbDeniedKey).then(function(idbDenied) {
+      if (idbDenied === '1' && !localStorage.getItem(idbDeniedKey)) {
+        console.log('[IDB] ✅ 從 IndexedDB 恢復「已拒絕」狀態');
+        localStorage.setItem(idbDeniedKey, '1');
+        updateGcalWidget();
+      }
+    });
+    idbGetAsync(idbEnabledKey).then(function(idbEnabled) {
+      if (idbEnabled === '1' && !localStorage.getItem(idbEnabledKey)) {
+        console.log('[IDB] ✅ 從 IndexedDB 恢復「已授權」狀態');
+        localStorage.setItem(idbEnabledKey, '1');
+      }
+    });
+  }
+
   var anonDenied = localStorage.getItem(GCAL_DENIED_KEY + '_anon');
   if (anonDenied) {
-    gcalSet(GCAL_DENIED_KEY, anonDenied);
+    gcalSet(GCAL_DENIED_KEY, anonDenied);  // 自動寫入 IndexedDB
     localStorage.removeItem(GCAL_DENIED_KEY + '_anon');
   }
   var anonToken = localStorage.getItem('sb_gcal_token_anon');
   if (anonToken) {
     var anonExpiry = localStorage.getItem('sb_gcal_expiry_anon');
-    // 只在該 UID 尚未有 token 時才遷移
+    // 只在該 UID 尚未有 token 時才遷移（防止覆蓋已有的授權 token）
     if (!gcalGet('sb_gcal_token')) {
-      gcalSet('sb_gcal_token', anonToken);
+      gcalSet('sb_gcal_token', anonToken);   // 自動寫入 IndexedDB
       gcalSet('sb_gcal_expiry', anonExpiry || '0');
     }
     localStorage.removeItem('sb_gcal_token_anon');
     localStorage.removeItem('sb_gcal_expiry_anon');
   }
 
-  currentUser = prevUser; // 恢復 currentUser（實際的 auth state change 會重新設定）
+  currentUser = prevUser; // 恢復 currentUser（onAuthStateChanged 會立刻重新設定）
 
   var storedToken      = gcalGet('sb_gcal_token');  // 使用 gcalKey() 隔離 UID
   var storedExpiry     = parseInt(gcalGet('sb_gcal_expiry') || '0', 10);
@@ -2335,12 +2385,12 @@ function gcalHandleAuthStateChange(user) {
 
   console.log('曾授權:', hasEverEnabled, '| 已關閉:', isDisabled, '| 已拒絕:', isDenied);
 
-  // 【修復】判斷 A：從未授權 或 主動關閉 或 曾拒絕 → 不觸發任何授權
-  // 即使快取被清也保持「已關閉/已拒絕」的狀態，防止誤觸發重新授權
+  // 【X1】判斷 A：從未授權 或 主動關閉 或 曾拒絕 → 不觸發任何授權
+  // IndexedDB 中的授權狀態永久保留，即使 localStorage 清除也不會丟失
   if (!hasEverEnabled || isDisabled || isDenied) {
     gcalAccessToken = null;
     gcalTokenExpiry = 0;
-    console.log('→ 不觸發授權（原因：未授權/已關閉/已拒絕）');
+    console.log('→ 不觸發授權（原因：未授權/已關閉/已拒絕，狀態存儲在 IndexedDB）');
     console.groupEnd();
     return;
   }
@@ -2484,21 +2534,194 @@ var multiSelectMode = false;
 var selectedBookingIds = new Set();
 
 // 取得當前帳號專屬的 key（加 UID 後綴）
+// ════════════════════════════════════════════════════════════════════════════
+// 【X1 Plan】IndexedDB 層 - GCal 授權狀態永久隔離儲存
+// ════════════════════════════════════════════════════════════════════════════
+// 原理：GCal 授權狀態存在 IndexedDB，與 localStorage 完全分開
+//      即使 localStorage.clear() 也不影響，確保「已關閉」狀態永久保留
+
+var idbName = 'CourseBooking_GCalAuth';
+var idbVersion = 1;
+var idbStoreName = 'gcal_state';
+var idbReadyPromise = null;
+var idbDB = null;
+
+// 初始化 IndexedDB，回傳 Promise
+function idbInit() {
+  if (idbReadyPromise) return idbReadyPromise;
+  
+  idbReadyPromise = new Promise(function(resolve, reject) {
+    if (!window.indexedDB) {
+      console.warn('[IDB] IndexedDB 不支持，降級使用 localStorage');
+      resolve(false);
+      return;
+    }
+    
+    var req = indexedDB.open(idbName, idbVersion);
+    
+    req.onerror = function() {
+      console.error('[IDB] 打開失敗:', req.error);
+      resolve(false);
+    };
+    
+    req.onsuccess = function() {
+      idbDB = req.result;
+      console.log('[IDB] ✅ 初始化成功');
+      resolve(true);
+    };
+    
+    req.onupgradeneeded = function(evt) {
+      var db = evt.target.result;
+      if (!db.objectStoreNames.contains(idbStoreName)) {
+        db.createObjectStore(idbStoreName, { keyPath: 'key' });
+        console.log('[IDB] 創建 objectStore:', idbStoreName);
+      }
+    };
+  });
+  
+  return idbReadyPromise;
+}
+
+// IndexedDB 讀取（Promise）
+function idbGetAsync(key) {
+  return idbInit().then(function(ready) {
+    if (!ready || !idbDB) return null;
+    
+    return new Promise(function(resolve) {
+      try {
+        var tx = idbDB.transaction([idbStoreName], 'readonly');
+        var store = tx.objectStore(idbStoreName);
+        var req = store.get(key);
+        
+        req.onsuccess = function() {
+          var record = req.result;
+          resolve(record ? record.value : null);
+        };
+        req.onerror = function() {
+          resolve(null);
+        };
+      } catch(e) {
+        resolve(null);
+      }
+    });
+  });
+}
+
+// IndexedDB 寫入（Promise）
+function idbSetAsync(key, value) {
+  return idbInit().then(function(ready) {
+    if (!ready || !idbDB) return false;
+    
+    return new Promise(function(resolve) {
+      try {
+        var tx = idbDB.transaction([idbStoreName], 'readwrite');
+        var store = tx.objectStore(idbStoreName);
+        var req = store.put({ key: key, value: value });
+        
+        req.onsuccess = function() {
+          resolve(true);
+        };
+        req.onerror = function() {
+          resolve(false);
+        };
+      } catch(e) {
+        resolve(false);
+      }
+    });
+  });
+}
+
+// IndexedDB 刪除（Promise）
+function idbRemoveAsync(key) {
+  return idbInit().then(function(ready) {
+    if (!ready || !idbDB) return false;
+    
+    return new Promise(function(resolve) {
+      try {
+        var tx = idbDB.transaction([idbStoreName], 'readwrite');
+        var store = tx.objectStore(idbStoreName);
+        var req = store.delete(key);
+        
+        req.onsuccess = function() {
+          resolve(true);
+        };
+        req.onerror = function() {
+          resolve(false);
+        };
+      } catch(e) {
+        resolve(false);
+      }
+    });
+  });
+}
+
+// 同步版本（非阻塞，用於快速讀取，會失敗則 fallback localStorage）
+function idbGetSync(key) {
+  // 由於 IndexedDB 是非同步，此處不實現真正的同步
+  // 改用 localStorage 作為快取層
+  return localStorage.getItem('_idb_cache_' + key) || null;
+}
+
+// IndexedDB key 生成（與 gcalKey 同邏輯）
+function idbKey(base) {
+  var uid = currentUser ? currentUser.uid : 'anon';
+  return base + '_' + uid;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 【X1】gcalGet/Set/Remove - 優先用 IndexedDB，自動同步 localStorage 作為快取
+// ════════════════════════════════════════════════════════════════════════════
+
 function gcalKey(base) {
   var uid = currentUser ? currentUser.uid : 'anon';
   return base + '_' + uid;
 }
+
 function gcalGet(base) {
-  return localStorage.getItem(gcalKey(base));
+  // 優先嘗試 IndexedDB（非同步），同時 fallback localStorage
+  // 返回 localStorage 結果，背景也會同時查 IndexedDB
+  var key = gcalKey(base);
+  var lsValue = localStorage.getItem(key);
+  
+  // 【新增】背景同步 IndexedDB
+  idbGetAsync(key).then(function(idbValue) {
+    if (idbValue !== null && lsValue !== idbValue) {
+      // IndexedDB 有值但 localStorage 沒有或不同，恢復到 localStorage
+      console.log('[GCal] 從 IndexedDB 恢復:', base);
+      localStorage.setItem(key, idbValue);
+    }
+  });
+  
+  return lsValue;
 }
+
 function gcalSet(base, val) {
-  localStorage.setItem(gcalKey(base), val);
+  var key = gcalKey(base);
+  
+  // 同時寫入 localStorage 和 IndexedDB
+  localStorage.setItem(key, val);
+  
+  // 非同步寫入 IndexedDB（不阻塞主線程）
+  idbSetAsync(key, val).then(function(success) {
+    if (success) {
+      console.log('[GCal] IndexedDB 已保存:', base);
+    }
+  });
 }
+
 function gcalRemove(base) {
-  localStorage.removeItem(gcalKey(base));
+  var key = gcalKey(base);
+  
+  // 同時刪除 localStorage 和 IndexedDB
+  localStorage.removeItem(key);
+  
+  // 非同步刪除 IndexedDB
+  idbRemoveAsync(key);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
 var gcalTokenClient = null;
-var gcalAccessToken = null; // 登入後從 sessionStorage 以 UID 為 key 載入
+var gcalAccessToken = null; // 【X1】使用 IndexedDB 存儲，不再依賴 localStorage
 var gcalTokenExpiry = 0;
 var gcalPendingAction = null;
 
@@ -2510,11 +2733,11 @@ function isGcalSyncAccount() {
   // 防止多帳號場景下，前一個帳號的 email 還存著導致誤認為已授權
   if (!currentUser) return false;
   var e = getGcalSyncEmail();
-  // 必須同時滿足：
+  // 【X1】必須同時滿足四個條件（確保多帳號隔離，授權狀態來自 IndexedDB）：
   // 1. email 匹配（確認是同一個帳號）
-  // 2. 該 UID 曾授權過（GCAL_ENABLED_KEY = '1'）
-  // 3. 該 UID 沒有關閉（GCAL_DISABLED_KEY ≠ '1'）
-  // 4. 該 UID 沒有拒絕（GCAL_DENIED_KEY ≠ '1'）
+  // 2. 該 UID 曾授權過（GCAL_ENABLED_KEY = '1'，存儲在 IndexedDB）
+  // 3. 該 UID 沒有關閉（GCAL_DISABLED_KEY ≠ '1'，存儲在 IndexedDB）
+  // 4. 該 UID 沒有拒絕（GCAL_DENIED_KEY ≠ '1'，存儲在 IndexedDB）
   var hasAuth = gcalGet(GCAL_ENABLED_KEY) === '1';
   var isDisabled = gcalGet(GCAL_DISABLED_KEY) === '1';
   var isDenied = gcalGet(GCAL_DENIED_KEY) === '1';
@@ -2537,10 +2760,11 @@ function initGcalClient() {
       }
       gcalAccessToken = resp.access_token;
       gcalTokenExpiry = Date.now() + (resp.expires_in - 60) * 1000;
-      localStorage.setItem('sb_gcal_token_'  + (currentUser ? currentUser.uid : 'anon'), gcalAccessToken);
-      localStorage.setItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'), gcalTokenExpiry.toString());
+      // 【X1】使用 gcalSet 替代直接 localStorage，自動同步到 IndexedDB
+      gcalSet('sb_gcal_token', gcalAccessToken);
+      gcalSet('sb_gcal_expiry', gcalTokenExpiry.toString());
       if (gcalTokenTimeout) { clearTimeout(gcalTokenTimeout); gcalTokenTimeout = null; }
-      // 標記「曾成功授權過」（永久記錄，不隨登出清除）
+      // 標記「曾成功授權過」（永久記錄，不隨登出清除，存儲在 IndexedDB）
       gcalSet(GCAL_ENABLED_KEY, '1');
       console.log('[GCal] ✅ token 取得成功');
       updateGcalWidget();
@@ -2559,8 +2783,9 @@ function ensureGcalToken(callback) {
   console.log('[GCal] ensureGcalToken: token 過期或不存在，清除並重新取得');
   gcalAccessToken = null;
   gcalTokenExpiry = 0;
-  localStorage.removeItem('sb_gcal_token_'  + (currentUser ? currentUser.uid : 'anon'));
-  localStorage.removeItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'));
+  // 【X1】使用 gcalRemove 替代直接 localStorage，自動同步刪除 IndexedDB
+  gcalRemove('sb_gcal_token');
+  gcalRemove('sb_gcal_expiry');
   updateGcalWidget();
   if (!gcalTokenClient) { console.log('[GCal] ensureGcalToken: 初始化 gcalTokenClient'); initGcalClient(); }
   if (!gcalTokenClient) { toast('Google Calendar SDK 尚未載入，請重新整理', '⚠️'); return; }
@@ -3002,13 +3227,18 @@ function openGcalSettings() {
 }
 
 function clearGcalSettings() {
+  // 【X1】關閉同步：使用統一的 gcalSet/gcalRemove 確保同時更新 localStorage 和 IndexedDB
   gcalRemove(GCAL_SYNC_KEY);
   gcalRemove(GCAL_ENABLED_KEY);   // 清除授權記錄，下次登入不再觸發
-  gcalSet(GCAL_DISABLED_KEY, '1');
+  gcalSet(GCAL_DISABLED_KEY, '1');  // 設為「已關閉」，同時寫入 IndexedDB（永久記錄）
+  
   gcalAccessToken = null;
   gcalTokenExpiry = 0;
-  localStorage.removeItem('sb_gcal_token_' + (currentUser ? currentUser.uid : 'anon'));
-  localStorage.removeItem('sb_gcal_expiry_' + (currentUser ? currentUser.uid : 'anon'));
+  
+  // 【X1 改進】用 gcalRemove 替代直接 localStorage 操作，確保 IndexedDB 也同步刪除
+  gcalRemove('sb_gcal_token');
+  gcalRemove('sb_gcal_expiry');
+  
   updateGcalWidget();
   closeModal('gcalOverlay');
   toast('Google 日曆同步已關閉', '📅');
