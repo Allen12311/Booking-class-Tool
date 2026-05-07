@@ -980,6 +980,10 @@ var GCAL_DISABLED_KEY  = 'sb_gcal_disabled';
 var GCAL_DENIED_KEY    = 'sb_gcal_denied';
 var GCAL_SYNC_KEY      = 'sb_gcal_sync_email';
 
+// ── 部署版本號：每次重新部署時更新，用於清除舊的 IndexedDB 授權狀態 ──
+var APP_VERSION = '20260507';
+var APP_VERSION_KEY = 'sb_app_version';
+
 var FIREBASE_CONFIG_KEY = 'sb_firebase_config';
 var LOGO_STORAGE_KEY = 'sb_logo';
 var db = null;
@@ -2373,35 +2377,70 @@ function gcalHandleAuthStateChange(user) {
 
   // 遷移 anon key → uid key（向下相容）
   var idbDisabledKey = GCAL_DISABLED_KEY + '_' + user.uid;
-  var idbDeniedKey = GCAL_DENIED_KEY + '_' + user.uid;
-  var idbEnabledKey = GCAL_ENABLED_KEY + '_' + user.uid;
-  
-  // 快速檢查：localStorage 中是否缺少授權狀態
+  var idbDeniedKey   = GCAL_DENIED_KEY   + '_' + user.uid;
+  var idbEnabledKey  = GCAL_ENABLED_KEY  + '_' + user.uid;
+  var idbTokenKey    = 'sb_gcal_token'   + '_' + user.uid;
+
+  // 【X1 修復】快取清理後的 IndexedDB 恢復邏輯
+  // ─────────────────────────────────────────────────────────────────────────
+  // 核心原則：
+  //   ✅ 可以恢復：DISABLED（已關閉）、DENIED（已拒絕）
+  //      → 這些是「保護狀態」，恢復後不會造成誤授權
+  //
+  //   ❌ 不恢復：ENABLED（曾授權）
+  //      → 如果 localStorage 沒有 ENABLED，代表此裝置/帳號真的沒有授權
+  //        不應從 IndexedDB 自動恢復，否則會讓從未授權的帳號誤判為「曾授權」
+  //      → ENABLED 只由明確的授權動作（gcalAuthorize）寫入，不自動恢復
+  //
+  //   ✅ 可以恢復：sb_gcal_token（token 本身）
+  //      → 搭配 ENABLED 一起存在才恢復，防止孤立 token
+  // ─────────────────────────────────────────────────────────────────────────
   var lsDisabled = localStorage.getItem(idbDisabledKey);
-  var lsDenied = localStorage.getItem(idbDeniedKey);
-  var lsEnabled = localStorage.getItem(idbEnabledKey);
-  
-  // 【X1】非同步恢復：IndexedDB 查詢不應阻塞主線程
-  // 但快速返回 localStorage 結果，稍後再補充 IndexedDB 的恢復
-  if (!lsDisabled || !lsDenied || !lsEnabled) {
-    console.log('[IDB] 偵測快取可能被清，後台嘗試從 IndexedDB 恢復...');
+  var lsDenied   = localStorage.getItem(idbDeniedKey);
+
+  if (!lsDisabled) {
     idbGetAsync(idbDisabledKey).then(function(idbDisabled) {
-      if (idbDisabled === '1' && !localStorage.getItem(idbDisabledKey)) {
+      if (idbDisabled === '1') {
         console.log('[IDB] ✅ 從 IndexedDB 恢復「已關閉」狀態');
         localStorage.setItem(idbDisabledKey, '1');
-        updateGcalWidget(); // 重新更新 widget 以反映狀態
+        updateGcalWidget();
       }
     });
+  }
+  if (!lsDenied) {
     idbGetAsync(idbDeniedKey).then(function(idbDenied) {
-      if (idbDenied === '1' && !localStorage.getItem(idbDeniedKey)) {
+      if (idbDenied === '1') {
         console.log('[IDB] ✅ 從 IndexedDB 恢復「已拒絕」狀態');
         localStorage.setItem(idbDeniedKey, '1');
         updateGcalWidget();
       }
     });
-    idbGetAsync(idbEnabledKey).then(function(idbEnabled) {
-      if (idbEnabled === '1' && !localStorage.getItem(idbEnabledKey)) {
-        console.log('[IDB] ✅ 從 IndexedDB 恢復「已授權」狀態');
+  }
+  // 【重要】ENABLED + TOKEN 只在明確需要時從 IDB 恢復
+  // 條件：localStorage 沒有 ENABLED，但 IDB 有 ENABLED 且 token 也存在且未過期
+  var lsEnabled = localStorage.getItem(idbEnabledKey);
+  if (!lsEnabled) {
+    Promise.all([
+      idbGetAsync(idbEnabledKey),
+      idbGetAsync(idbTokenKey),
+      idbGetAsync('sb_gcal_expiry_' + user.uid)
+    ]).then(function(results) {
+      var idbEnabled = results[0];
+      var idbToken   = results[1];
+      var idbExpiry  = parseInt(results[2] || '0', 10);
+      // token 存在且未過期才恢復（否則就是無效的舊授權）
+      if (idbEnabled === '1' && idbToken && Date.now() < idbExpiry) {
+        console.log('[IDB] ✅ 從 IndexedDB 恢復有效授權（ENABLED + token）');
+        localStorage.setItem(idbEnabledKey, '1');
+        localStorage.setItem(idbTokenKey, idbToken);
+        localStorage.setItem('sb_gcal_expiry_' + user.uid, idbExpiry.toString());
+        // 通知狀態更新
+        gcalAccessToken  = idbToken;
+        gcalTokenExpiry  = idbExpiry;
+        updateGcalWidget();
+      } else if (idbEnabled === '1' && (!idbToken || Date.now() >= idbExpiry)) {
+        // ENABLED 存在但 token 已過期：保留 ENABLED 標記，等刷新
+        console.log('[IDB] ✅ 從 IndexedDB 恢復「已授權」標記（token 已過期，待刷新）');
         localStorage.setItem(idbEnabledKey, '1');
       }
     });
@@ -2622,6 +2661,16 @@ function idbInit() {
       idbDB = req.result;
       console.log('[IDB] ✅ 初始化成功');
       resolve(true);
+      // ── 版本號檢查：新部署時清除全部 GCal 授權狀態 ──
+      // 防止舊版本殘留的 IndexedDB 狀態在新部署後繼續生效
+      var storedVersion = localStorage.getItem(APP_VERSION_KEY);
+      if (storedVersion !== APP_VERSION) {
+        console.log('[IDB] 偵測到新部署 (' + storedVersion + ' → ' + APP_VERSION + ')，清除全部 GCal 狀態');
+        gcalClearAllIdbStates().then(function() {
+          localStorage.setItem(APP_VERSION_KEY, APP_VERSION);
+          console.log('[IDB] ✅ 版本更新完成，GCal 狀態已重置');
+        });
+      }
     };
     
     req.onupgradeneeded = function(evt) {
@@ -2634,6 +2683,41 @@ function idbInit() {
   });
   
   return idbReadyPromise;
+}
+
+// 清除 IndexedDB 中所有 GCal 授權狀態（用於新部署或手動重置）
+// 只清除 GCal 相關的 key，不影響其他資料
+function gcalClearAllIdbStates() {
+  return idbInit().then(function(ready) {
+    if (!ready || !idbDB) return;
+    return new Promise(function(resolve) {
+      try {
+        var tx = idbDB.transaction([idbStoreName], 'readwrite');
+        var store = tx.objectStore(idbStoreName);
+        var req = store.openCursor();
+        var gcalPrefixes = [
+          'sb_gcal_enabled_', 'sb_gcal_disabled_', 'sb_gcal_denied_',
+          'sb_gcal_token_', 'sb_gcal_expiry_', 'sb_gcal_sync_email_'
+        ];
+        req.onsuccess = function(e) {
+          var cursor = e.target.result;
+          if (cursor) {
+            var key = cursor.key;
+            var isGcal = gcalPrefixes.some(function(p) { return key.startsWith(p); });
+            if (isGcal) {
+              cursor.delete();
+              // 同時清除 localStorage
+              localStorage.removeItem(key);
+            }
+            cursor.continue();
+          } else {
+            resolve();
+          }
+        };
+        req.onerror = function() { resolve(); };
+      } catch(e) { resolve(); }
+    });
+  });
 }
 
 // IndexedDB 讀取（Promise）
