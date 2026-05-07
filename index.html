@@ -1585,6 +1585,7 @@ async function leaveGroup() {
 var signInRetryCount = 0;
 var MAX_SIGN_IN_RETRY = 2;
 var signInInProgress = false; // 標記登入進行中，防止 onAuthStateChanged(null) 誤觸發
+var gcalLoginInProgress = false; // 標記 GCal 登入進行中，防止 onAuthStateChanged 重複處理
 
 function signInWithGoogle() {
   if (!auth) { toast('請先完成 Firebase 設定', '⚠️'); openFirebaseConfig(); return; }
