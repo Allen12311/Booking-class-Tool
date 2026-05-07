@@ -453,7 +453,7 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
         <button class="view-btn" id="btnCalendar" onclick="switchViewBtn('calendar')">月曆</button>
       </div>
     </div>
-    <div class="content" id="mainContent" style="display:none"></div>
+    <div class="content" id="mainContent"></div>
   </main>
 </div>
 
@@ -1273,21 +1273,11 @@ function onAuthStateChanged(user) {
     startIdleTimer();
     checkIdleTimeout();
     startTokenRefresh();
-    // startGcalRefresh() 已廢除，GCal 刷新邏輯已整合進 startTokenRefresh
+    startGcalRefresh(); // GCal token 背景排程
     updateGcalWidget();
     checkUserGroup(); // 完成後才隱藏 loginOverlay
   } else {
-    // 用戶登出（或登入失敗）
-    // 【保護】如果目前在登入流程中（signInWithPopup 進行中），忽略這個 null 狀態
-    // 讓 .then/.catch 區塊統一處理，避免誤觸發登出視窗
-    if (signInInProgress) {
-      console.log('[Auth] 登入進行中，忽略 onAuthStateChanged(null)');
-      return;
-    }
-
     document.getElementById('loginOverlay').style.display = 'flex';
-    var mainContent = document.getElementById('mainContent');
-    if (mainContent) mainContent.style.display = 'none'; // 隱藏主畫面
     var userInfo = document.getElementById('userInfo');
     var authBtn = document.getElementById('authBtn');
     var drawerAuthBtn = document.getElementById('drawerAuthBtn');
@@ -1319,16 +1309,15 @@ function onAuthStateChanged(user) {
 // ── 群組管理 ──
 async function checkUserGroup() {
   if (!db || !currentUser) return;
+  // 顯示載入中提示（loginOverlay 繼續顯示）
   var statusEl = document.getElementById('loginStatus');
-  var mainContent = document.getElementById('mainContent');
   if (statusEl) statusEl.textContent = '驗證身份中，請稍候…';
   try {
     var snap = await db.collection('groups')
       .where('memberUIDs', 'array-contains', currentUser.uid)
       .limit(1).get();
-    // 驗證成功，隱藏登入頁 + 顯示主畫面
+    // 驗證完成，才隱藏 loginOverlay
     document.getElementById('loginOverlay').style.display = 'none';
-    if (mainContent) mainContent.style.display = ''; // 顯示主畫面
     if (statusEl) statusEl.textContent = '';
     if (!snap.empty) {
       var doc = snap.docs[0];
@@ -1342,8 +1331,7 @@ async function checkUserGroup() {
     console.error('checkUserGroup error:', e);
     if (statusEl) statusEl.textContent = '載入群組失敗，請確認網路後重新整理頁面';
     toast('載入群組失敗，請確認網路連線', '⚠️');
-    // 驗證失敗，保持 loginOverlay 顯示，mainContent 隱藏
-    if (mainContent) mainContent.style.display = 'none';
+    // 驗證失敗，保持 loginOverlay 顯示，讓使用者重試
   }
 }
 
@@ -1578,7 +1566,7 @@ async function leaveGroup() {
 
 var signInRetryCount = 0;
 var MAX_SIGN_IN_RETRY = 2;
-var signInInProgress = false; // 標記登入進行中，防止 onAuthStateChanged(null) 誤觸發
+var gcalLoginInProgress = false; // 正在執行 signInWithPopup，onAuthStateChanged 應跳過 GCal 處理
 
 function signInWithGoogle() {
   if (!auth) { toast('請先完成 Firebase 設定', '⚠️'); openFirebaseConfig(); return; }
@@ -1609,13 +1597,13 @@ function signInWithGoogle() {
     console.log('[GCal] 未曾授權或已關閉，不申請 Calendar scope');
   }
 
-  // 標記登入進行中：防止 onAuthStateChanged 在登入過程中誤觸發 null 狀態
-  signInInProgress = true;
+  // 標記登入進行中：onAuthStateChanged 看到這個旗標會跳過 GCal 處理
+  // 讓 signInWithPopup.then() 統一負責 token 更新
+  gcalLoginInProgress = true;
 
   auth.signInWithPopup(provider)
     .then(function(result) {
-      signInInProgress = false; // 清除旗標
-      gcalLoginInProgress = false; // 清除 GCal 標記
+      gcalLoginInProgress = false; // 清除旗標
       signInRetryCount = 0;
       if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
       if (!result || !result.user) return;
@@ -1646,7 +1634,6 @@ function signInWithGoogle() {
       // 從未授權的情況：什麼都不做，等用戶進設定頁
     })
     .catch(function(err) {
-      signInInProgress = false; // 清除標記（登入失敗）
       gcalLoginInProgress = false; // 清除旗標
       if (loginBtn) { loginBtn.disabled = false; loginBtn.style.opacity = ''; }
       signInRetryCount++;
