@@ -1718,36 +1718,47 @@ function signInWithGoogle() {
       var disabledKey = GCAL_DISABLED_KEY + '_' + uid;
       var deniedKey   = GCAL_DENIED_KEY   + '_' + uid;
       var hasEnabled  = localStorage.getItem(enabledKey) === '1';
+      // 【Bug Fix P0 #10】先讀「該 UID 是否已關閉同步」，後續分支都要尊重這個決定
+      var isDisabledForUid = localStorage.getItem(disabledKey) === '1';
+      var isDeniedForUid   = localStorage.getItem(deniedKey)   === '1';
 
       if (result.credential && result.credential.accessToken) {
-        // 【X1】改用 gcalSet/gcalKey 存儲，自動同步到 IndexedDB
-        // 確保 UID 隔離，即使 localStorage 清除也能從 IndexedDB 恢復
-        gcalAccessToken = result.credential.accessToken;
-        gcalTokenExpiry = Date.now() + 55 * 60 * 1000;
-        
-        // 使用 result.user.uid 直接寫入，不依賴 currentUser 的狀態
-        // （onAuthStateChanged 可能已觸發，也可能尚未觸發）
-        var uidKey = function(base) { return base + '_' + result.user.uid; };
-        localStorage.setItem(uidKey('sb_gcal_token'), gcalAccessToken);
-        localStorage.setItem(uidKey('sb_gcal_expiry'), gcalTokenExpiry.toString());
-        localStorage.setItem(uidKey(GCAL_ENABLED_KEY), '1');
-        localStorage.setItem(uidKey(GCAL_SYNC_KEY), email);
-        localStorage.removeItem(uidKey(GCAL_DENIED_KEY));
-        localStorage.removeItem(uidKey(GCAL_DISABLED_KEY));
-        // 同步寫入 IndexedDB
-        idbSetAsync(uidKey('sb_gcal_token'), gcalAccessToken);
-        idbSetAsync(uidKey('sb_gcal_expiry'), gcalTokenExpiry.toString());
-        idbSetAsync(uidKey(GCAL_ENABLED_KEY), '1');
-        idbSetAsync(uidKey(GCAL_SYNC_KEY), email);
-        idbRemoveAsync(uidKey(GCAL_DENIED_KEY));
-        idbRemoveAsync(uidKey(GCAL_DISABLED_KEY));
-        console.log('[GCal] 登入取得 token，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
-      } else if (hasEnabled && localStorage.getItem(disabledKey) !== '1') {
+        // 【Bug Fix P0 #10】Google 可能因瀏覽器 session 還記得 calendar scope 而自動回傳 accessToken，
+        // 即使我們沒主動 addScope。若使用者明確關閉/拒絕同步，必須無視這個 token，
+        // 否則會把 ENABLED 重新打開、DISABLED 被清掉，等於偷偷把同步打開。
+        if (isDisabledForUid || isDeniedForUid) {
+          console.log('[GCal] 該帳號已關閉/拒絕同步 (DISABLED=' + isDisabledForUid + ', DENIED=' + isDeniedForUid + ')，忽略 Google 自動回傳的 calendar token');
+          // 不寫 token、不動 ENABLED/DISABLED/DENIED 狀態
+        } else {
+          // 【X1】改用 gcalSet/gcalKey 存儲，自動同步到 IndexedDB
+          // 確保 UID 隔離，即使 localStorage 清除也能從 IndexedDB 恢復
+          gcalAccessToken = result.credential.accessToken;
+          gcalTokenExpiry = Date.now() + 55 * 60 * 1000;
+
+          // 使用 result.user.uid 直接寫入，不依賴 currentUser 的狀態
+          // （onAuthStateChanged 可能已觸發，也可能尚未觸發）
+          var uidKey = function(base) { return base + '_' + result.user.uid; };
+          localStorage.setItem(uidKey('sb_gcal_token'), gcalAccessToken);
+          localStorage.setItem(uidKey('sb_gcal_expiry'), gcalTokenExpiry.toString());
+          localStorage.setItem(uidKey(GCAL_ENABLED_KEY), '1');
+          localStorage.setItem(uidKey(GCAL_SYNC_KEY), email);
+          localStorage.removeItem(uidKey(GCAL_DENIED_KEY));
+          localStorage.removeItem(uidKey(GCAL_DISABLED_KEY));
+          // 同步寫入 IndexedDB
+          idbSetAsync(uidKey('sb_gcal_token'), gcalAccessToken);
+          idbSetAsync(uidKey('sb_gcal_expiry'), gcalTokenExpiry.toString());
+          idbSetAsync(uidKey(GCAL_ENABLED_KEY), '1');
+          idbSetAsync(uidKey(GCAL_SYNC_KEY), email);
+          idbRemoveAsync(uidKey(GCAL_DENIED_KEY));
+          idbRemoveAsync(uidKey(GCAL_DISABLED_KEY));
+          console.log('[GCal] 登入取得 token，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
+        }
+      } else if (hasEnabled && !isDisabledForUid && !isDeniedForUid) {
         // 曾授權但這次沒拿到 token（Google 不再給，需靜默刷新）
         console.log('[GCal] 曾授權，無 credential token，啟動 gcalSilentRefreshOrPrompt');
         gcalSilentRefreshOrPrompt(email);
       }
-      // 從未授權的情況：什麼都不做，等用戶進設定頁
+      // 從未授權／已關閉／已拒絕的情況：什麼都不做
     })
     .catch(function(err) {
       // 【Bug Fix P3 #8】signInInProgress 改在 .finally 統一清除
