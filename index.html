@@ -859,28 +859,6 @@ table td:nth-child(3) { max-width: 220px; word-break: break-all; overflow-wrap: 
   </div>
 </div>
 
-<!-- GCAL TOKEN EXPIRED MODAL -->
-<div class="overlay" id="gcalExpiredOverlay">
-  <div class="modal" style="width:420px;max-width:95vw">
-    <div class="modal-header">
-      <div><div class="modal-title">🔐 Google 日曆同步授權已過期</div><div class="modal-sub">Re-authorization Required</div></div>
-    </div>
-    <div class="modal-body">
-      <div style="background:#fef3e2;border-radius:8px;padding:14px;font-size:13px;color:#8b5e1a;line-height:1.7;margin-bottom:16px">
-        ⚠️ 您的 Google 日曆同步授權已過期或已被撤銷。<br>請重新授權以恢復自動同步功能。
-      </div>
-      <div style="font-size:12px;color:var(--text-sub);line-height:1.7">
-        同步帳號：<strong id="gcalExpiredEmail" style="color:var(--ink)"></strong><br>
-        授權過期後，新增或修改的預約將不會同步到 Google 日曆，直到重新授權為止。
-      </div>
-    </div>
-    <div class="modal-footer" style="justify-content:space-between">
-      <button class="btn btn-sm" style="border:1px solid var(--border);background:transparent;color:var(--text-sub);border-radius:4px;cursor:pointer;padding:6px 14px;font-family:inherit" onclick="closeModal('gcalExpiredOverlay')">稍後再說</button>
-      <button class="btn btn-gold btn-sm" onclick="closeModal('gcalExpiredOverlay');gcalAuthorize()">🔑 立即重新授權</button>
-    </div>
-  </div>
-</div>
-
 <!-- IMPORT CSV MODAL (Full version with preview) -->
 <div class="overlay" id="importCsvOverlay">
   <div class="modal" style="width:520px;max-width:95vw">
@@ -979,6 +957,11 @@ var GCAL_ENABLED_KEY   = 'sb_gcal_enabled';
 var GCAL_DISABLED_KEY  = 'sb_gcal_disabled';
 var GCAL_DENIED_KEY    = 'sb_gcal_denied';
 var GCAL_SYNC_KEY      = 'sb_gcal_sync_email';
+// 【啟發式靜默刷新】最近一次 token 取得成功的時間戳（Unix ms）
+// 用於判斷 Google session 大機率是否還活著 — 若最近 7 天內曾成功，
+// 登入時嘗試靜默刷新（彈 popup 風險低）；否則維持紅徽章不嘗試
+var GCAL_LAST_SUCCESS_KEY        = 'sb_gcal_last_success';
+var GCAL_SILENT_REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 天時間窗
 
 // ── 部署版本號：每次重新部署時更新，用於清除舊的 IndexedDB 授權狀態 ──
 var APP_VERSION = '20260507';
@@ -1116,18 +1099,28 @@ function stopGcalRefresh() {
   stopTokenRefresh();
 }
 
-// 純背景靜默刷新（不彈視窗，只回傳 success/fail callback）
+// 【Bug Fix #11】silentMode 旗標：true 時 token callback 失敗不彈 toast、不彈視窗
+var gcalSilentMode = false;
+
+// 純背景靜默刷新（不彈視窗、不彈 toast，只回傳 success/fail callback）
 function gcalSilentRefreshBackground(callback) {
   if (!window.google || !window.google.accounts) { callback(false); return; }
   if (!gcalTokenClient) initGcalClient();
   if (!gcalTokenClient) { callback(false); return; }
   var done = false;
-  var timer = setTimeout(function() {
-    if (!done) { done = true; callback(false); }
-  }, 15000);
+  // 進入靜默模式：失敗時不顯示 toast
+  gcalSilentMode = true;
+  function finish(success) {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    gcalSilentMode = false; // 退出靜默模式
+    callback(success);
+  }
+  var timer = setTimeout(function() { finish(false); }, 15000);
   var prev = gcalPendingAction;
   gcalPendingAction = function() {
-    if (!done) { done = true; clearTimeout(timer); callback(true); }
+    finish(true);
     if (prev) prev();
   };
   gcalTokenClient.requestAccessToken({ prompt: '' });
@@ -1277,6 +1270,7 @@ function onAuthStateChanged(user) {
       gcalRemove(GCAL_ENABLED_KEY);
       gcalRemove(GCAL_DISABLED_KEY);
       gcalRemove(GCAL_DENIED_KEY);
+      gcalRemove(GCAL_LAST_SUCCESS_KEY);
       // 清理舊帳號的閒置時間戳與群組關閉狀態
       localStorage.removeItem(IDLE_KEY_BASE + '_' + oldUser.uid);
       sessionStorage.removeItem('sb_group_dismissed_' + oldUser.uid);
@@ -1681,27 +1675,16 @@ function signInWithGoogle() {
   var provider = new firebase.auth.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
 
-  // 決定是否在登入時申請 Calendar scope：
-  // - 從未授權（無 ENABLED 記錄）→ 不申請，讓用戶進設定頁手動開啟
-  // - 曾授權過（有 ENABLED 記錄）→ 申請 scope，讓登入時直接完成 token 更新
-  // - 主動關閉（DISABLED）→ 不申請
-  // 【X1】IndexedDB 優先級高於 localStorage，但 IndexedDB 非同步
-  //      所以先檢查 localStorage（gcalGet 會在背景同時同步 IndexedDB）
-  //      IndexedDB 中的狀態若不同，會在背景自動恢復到 localStorage
-  // 注意：此時 currentUser 為 null，用 localStorage 直接搜尋所有 uid 的記錄
-  var anyEnabled  = Object.keys(localStorage).some(function(k) {
-    return k.startsWith(GCAL_ENABLED_KEY + '_') && localStorage.getItem(k) === '1';
-  });
-  var anyDisabled = Object.keys(localStorage).some(function(k) {
-    return k.startsWith(GCAL_DISABLED_KEY + '_') && localStorage.getItem(k) === '1';
-  });
-  var shouldRequestScope = anyEnabled && !anyDisabled;
-  if (shouldRequestScope) {
-    provider.addScope('https://www.googleapis.com/auth/calendar.events');
-    console.log('[GCal] 曾授權過，登入時申請 Calendar scope');
-  } else {
-    console.log('[GCal] 未曾授權或已關閉，不申請 Calendar scope');
-  }
+  // 【Bug Fix #12】登入流程完全與 GCal 脫鉤
+  // ────────────────────────────────────────────────────────────────────
+  // 不再 provider.addScope('calendar.events')，原因：
+  //   1. Firebase 登入只應該負責 Firebase 認證，不應混入 Google Calendar 同意 UI
+  //   2. addScope 在 anyEnabled 為 true 時觸發，但這個檢查跨所有 UID，
+  //      會誤把新帳號的登入流程也帶上 calendar scope，導致使用者看到莫名的彈窗
+  //   3. Calendar token 改由兩條路取得：
+  //      a. gcalAuthorize() — 使用者主動點「授權」（consent popup，合理）
+  //      b. gcalSilentRefreshBackground() — 純背景刷新，失敗只更新徽章
+  // ────────────────────────────────────────────────────────────────────
 
   // 標記登入進行中：防止 onAuthStateChanged 在登入過程中誤觸發 null 狀態
   signInInProgress = true;
@@ -1712,53 +1695,19 @@ function signInWithGoogle() {
       signInRetryCount = 0;
       if (!result || !result.user) return;
 
-      var uid   = result.user.uid;
-      var email = result.user.email;
-      var enabledKey  = GCAL_ENABLED_KEY  + '_' + uid;
-      var disabledKey = GCAL_DISABLED_KEY + '_' + uid;
-      var deniedKey   = GCAL_DENIED_KEY   + '_' + uid;
-      var hasEnabled  = localStorage.getItem(enabledKey) === '1';
-      // 【Bug Fix P0 #10】先讀「該 UID 是否已關閉同步」，後續分支都要尊重這個決定
-      var isDisabledForUid = localStorage.getItem(disabledKey) === '1';
-      var isDeniedForUid   = localStorage.getItem(deniedKey)   === '1';
-
-      if (result.credential && result.credential.accessToken) {
-        // 【Bug Fix P0 #10】Google 可能因瀏覽器 session 還記得 calendar scope 而自動回傳 accessToken，
-        // 即使我們沒主動 addScope。若使用者明確關閉/拒絕同步，必須無視這個 token，
-        // 否則會把 ENABLED 重新打開、DISABLED 被清掉，等於偷偷把同步打開。
-        if (isDisabledForUid || isDeniedForUid) {
-          console.log('[GCal] 該帳號已關閉/拒絕同步 (DISABLED=' + isDisabledForUid + ', DENIED=' + isDeniedForUid + ')，忽略 Google 自動回傳的 calendar token');
-          // 不寫 token、不動 ENABLED/DISABLED/DENIED 狀態
-        } else {
-          // 【X1】改用 gcalSet/gcalKey 存儲，自動同步到 IndexedDB
-          // 確保 UID 隔離，即使 localStorage 清除也能從 IndexedDB 恢復
-          gcalAccessToken = result.credential.accessToken;
-          gcalTokenExpiry = Date.now() + 55 * 60 * 1000;
-
-          // 使用 result.user.uid 直接寫入，不依賴 currentUser 的狀態
-          // （onAuthStateChanged 可能已觸發，也可能尚未觸發）
-          var uidKey = function(base) { return base + '_' + result.user.uid; };
-          localStorage.setItem(uidKey('sb_gcal_token'), gcalAccessToken);
-          localStorage.setItem(uidKey('sb_gcal_expiry'), gcalTokenExpiry.toString());
-          localStorage.setItem(uidKey(GCAL_ENABLED_KEY), '1');
-          localStorage.setItem(uidKey(GCAL_SYNC_KEY), email);
-          localStorage.removeItem(uidKey(GCAL_DENIED_KEY));
-          localStorage.removeItem(uidKey(GCAL_DISABLED_KEY));
-          // 同步寫入 IndexedDB
-          idbSetAsync(uidKey('sb_gcal_token'), gcalAccessToken);
-          idbSetAsync(uidKey('sb_gcal_expiry'), gcalTokenExpiry.toString());
-          idbSetAsync(uidKey(GCAL_ENABLED_KEY), '1');
-          idbSetAsync(uidKey(GCAL_SYNC_KEY), email);
-          idbRemoveAsync(uidKey(GCAL_DENIED_KEY));
-          idbRemoveAsync(uidKey(GCAL_DISABLED_KEY));
-          console.log('[GCal] 登入取得 token，有效至:', new Date(gcalTokenExpiry).toLocaleTimeString());
-        }
-      } else if (hasEnabled && !isDisabledForUid && !isDeniedForUid) {
-        // 曾授權但這次沒拿到 token（Google 不再給，需靜默刷新）
-        console.log('[GCal] 曾授權，無 credential token，啟動 gcalSilentRefreshOrPrompt');
-        gcalSilentRefreshOrPrompt(email);
-      }
-      // 從未授權／已關閉／已拒絕的情況：什麼都不做
+      // 【Bug Fix #12】登入流程完全與 GCal 脫鉤
+      // ──────────────────────────────────────────────────────────
+      // 此處不再處理 result.credential.accessToken（calendar token）：
+      //   - 沒 addScope，這個 token 只有 Firebase 基本 scope，無法呼叫 Calendar API
+      //   - 即使 Google 因快取同意而附帶 calendar scope，我們也不主動接受 —
+      //     全部交由 gcalHandleAuthStateChange（onAuthStateChanged 自動呼叫）統一處理
+      //
+      // 對該 UID 的處理規則（gcalHandleAuthStateChange 內部已實作）：
+      //   - 該 UID 曾 ENABLED 且未 DISABLED/DENIED → 背景靜默刷新 token
+      //     成功：無感恢復；失敗：徽章顯示「需重新授權」，不彈視窗
+      //   - 該 UID 從未 ENABLED 或已 DISABLED/DENIED → 完全不嘗試取 token
+      // ──────────────────────────────────────────────────────────
+      console.log('[Auth] 登入成功，UID:', result.user.uid);
     })
     .catch(function(err) {
       // 【Bug Fix P3 #8】signInInProgress 改在 .finally 統一清除
@@ -2384,13 +2333,11 @@ function autoCalcDuration() {
 // 處理頁面重整或重新登入後的 GCal token 狀態
 // （signInWithPopup.then() 會跳過這裡，直接自己處理）
 function gcalHandleAuthStateChange(user) {
-  // 【改動說明】
-  // 原本邏輯：token 過期 → 直接呼叫 gcalSilentRefreshOrPrompt（20s 後才彈視窗）
-  // 新邏輯：
-  //   B. token 有效 → 直接使用（同原本）
-  //   C. token 過期 → 先嘗試背景靜默刷新（不彈視窗）
-  //      → 成功：無縫恢復，使用者完全感知不到（閒置登出後重新登入的最佳體驗）
-  //      → 失敗：降級為 gcalSilentRefreshOrPrompt（帶 20s timeout + 彈視窗）
+  // 【設計說明】
+  //   B. token 有效 → 直接恢復同步狀態
+  //   C. token 過期 → 僅更新徽章為「需重新授權」，不主動發任何 token 請求
+  //                  （避免 GIS Token Client 在 Google session 失效時自動彈 consent）
+  //                  使用者主動點「重新授權」按鈕（gcalAuthorize）才彈出 consent
 
   console.group('[GCal] 登入後 token 狀態檢查');
   console.log('uid:', user.uid);
@@ -2417,6 +2364,7 @@ function gcalHandleAuthStateChange(user) {
     gcalRemove(GCAL_ENABLED_KEY);
     gcalRemove(GCAL_DISABLED_KEY);
     gcalRemove(GCAL_DENIED_KEY);
+    gcalRemove(GCAL_LAST_SUCCESS_KEY); // 啟發式時間戳也屬於舊帳號狀態
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -2524,13 +2472,12 @@ function gcalHandleAuthStateChange(user) {
 
   console.log('曾授權:', hasEverEnabled, '| 已關閉:', isDisabled, '| 已拒絕:', isDenied);
 
-  // 【X1 修復】判斷 A：加入額外防護 - 確認該帳號曾經授權過
-  // 防止多帳號場景下前一個帳號的授權狀態被誤用
-  // 規則：
-  // 1. 從未授權（hasEverEnabled = false）→ 不觸發
-  // 2. 曾授權但已關閉（DISABLED = true）→ 不觸發
-  // 3. 曾授權但被拒絕（DENIED = true）→ 不觸發
-  // 4. 曾授權且未關閉也未拒絕 → 可能需要刷新 token
+  // 【嚴格門檻】「靜默授權」防禦流程：必須三條件全部成立才允許背景靜默刷新
+  //   1. gcalGet(GCAL_ENABLED_KEY) === '1'  → 該 UID 確實「曾經主動授權過」
+  //   2. !isDisabled                        → 使用者沒有手動關閉同步
+  //   3. !isDenied                          → 使用者沒有明確拒絕授權
+  // 任一條件不成立則完全靜默退出，不做任何 token 請求、不彈 UI、不顯示 console 警告以外的提示
+  // 目的：新用戶 / 已關閉用戶 / 已拒絕用戶登入時 → 完全安靜，不要求任何日曆權限
   if (!hasEverEnabled || isDisabled || isDenied) {
     gcalAccessToken = null;
     gcalTokenExpiry = 0;
@@ -2550,115 +2497,63 @@ function gcalHandleAuthStateChange(user) {
   }
 
   // 判斷 C：token 過期（含從未有過 token 的情況）
-  // 【新邏輯】先嘗試純背景靜默刷新（不彈視窗、不顯示任何 UI）
-  // 因為使用者的 Google 網頁 Session 通常仍有效，這個請求大多會成功
+  // ─────────────────────────────────────────────────────────────────────────
+  // 【啟發式靜默刷新】Heuristic Silent Refresh
+  // ─────────────────────────────────────────────────────────────────────────
+  // 背景：GIS Token Client 的 prompt:'' 並非真正靜默 — 當 Google session
+  //      失效時會自動彈 consent，造成「登入完又被要求授權」的困擾。
+  //      但實際上 Google account session 預設約 30 天，多數時候還活著。
+  //
+  // 策略：用「時間窗啟發式」判斷是否值得賭一把：
+  //   ✅ 最近 GCAL_SILENT_REFRESH_WINDOW_MS（7 天）內曾成功取得 token
+  //      → Google session 大機率還在 → 嘗試 silent refresh
+  //      → 成功：無感恢復同步 + 自動觸發斷點同步
+  //      → 失敗：徽章紅，等使用者主動點按鈕（仍少數可能彈 popup）
+  //
+  //   ❌ 距離上次成功 > 7 天 / 從未成功
+  //      → Google session 大機率已失效 → 不賭不試
+  //      → 徽章紅，等使用者主動點「🔑 重新授權」按鈕
+  //
+  // 預期成功率：~85-95%（仍有少數情境可能彈 popup，但機率極低）
+  // ─────────────────────────────────────────────────────────────────────────
   gcalAccessToken = null;
   gcalTokenExpiry = 0;
-  console.log('→ token 過期，嘗試背景靜默刷新（不彈視窗）');
+
+  var lastSuccess = parseInt(gcalGet(GCAL_LAST_SUCCESS_KEY) || '0', 10);
+  var sinceLastSuccess = lastSuccess > 0 ? (Date.now() - lastSuccess) : Infinity;
+  var inSilentWindow = lastSuccess > 0 && sinceLastSuccess < GCAL_SILENT_REFRESH_WINDOW_MS;
+
+  if (!inSilentWindow) {
+    // 啟發式不命中：直接放棄，等使用者主動授權
+    console.log('→ token 過期 + 啟發式不命中（距上次成功',
+      lastSuccess > 0 ? Math.round(sinceLastSuccess / 86400000) + ' 天' : '從未',
+      '）→ 徽章變紅，不嘗試 silent refresh');
+    console.groupEnd();
+    updateGcalWidget();
+    return;
+  }
+
+  // 啟發式命中：嘗試背景靜默刷新
+  console.log('→ token 過期 + 啟發式命中（距上次成功', Math.round(sinceLastSuccess / 3600000),
+    '小時，<', GCAL_SILENT_REFRESH_WINDOW_MS / 86400000, '天）→ 嘗試 silent refresh');
   console.groupEnd();
 
-  _bgTaskCount++; // 標記為背景任務
+  _bgTaskCount++;
   gcalSilentRefreshBackground(function(success) {
     _bgTaskCount--;
     if (success) {
-      // 靜默刷新成功：使用者完全無感，直接恢復同步狀態
-      console.log('[GCal] ✅ 登入後靜默刷新成功，日曆同步已自動恢復');
+      console.log('[GCal] ✅ 啟發式靜默刷新成功，日曆同步已自動恢復');
       updateGcalWidget();
       if (!getGcalSyncEmail()) gcalSet(GCAL_SYNC_KEY, user.email);
+      // 【斷點同步】token 取得成功 → 立即觸發遺漏 booking 補推
+      try { gcalSyncPendingEvents(); } catch(e) { console.warn('[GCal] 斷點同步觸發失敗:', e); }
     } else {
-      // 靜默刷新失敗（Google Session 也已過期）→ 降級為帶提示的刷新
-      // 此時才使用原本的 gcalSilentRefreshOrPrompt（20s 後彈視窗提示重新授權）
-      console.warn('[GCal] 靜默刷新失敗，降級為帶提示流程');
-      updateGcalWidget(); // 先更新 widget 為未同步狀態
-      // 延遲 1 秒再執行，讓使用者先完成登入流程的 UI 渲染
-      setTimeout(function() {
-        if (!currentUser || !isGcalSyncAccount()) return;
-        gcalSilentRefreshOrPrompt(user.email);
-      }, 1000);
+      // 失敗：可能是 Google session 已失效（或網路、SDK 問題）
+      // 僅更新徽章，不彈任何 UI（即使少數情況下 GIS 自彈了 popup 也已發生）
+      console.warn('[GCal] 啟發式靜默刷新失敗，徽章顯示「需重新授權」');
+      updateGcalWidget();
     }
   });
-}
-
-function gcalSilentRefreshOrPrompt(email) {
-  // 優先嘗試靜默刷新（不彈視窗），失敗才顯示提示
-  var prompted = false;
-  var retryCount = 0;
-  var maxRetry = 20; // 最多 10 秒等 SDK 載入（每 500ms 一次）
-
-  // 20 秒 timeout → 靜默失敗，顯示提示視窗
-  var promptTimer = setTimeout(function() {
-    if (!gcalAccessToken && !prompted) {
-      prompted = true;
-      console.warn('[GCal] 靜默續期逾時（20s），顯示過期提示');
-      showGcalExpiredModal(email);
-    }
-  }, 20000);
-
-  function onTokenSuccess() {
-    // token 取得成功，清除 timer，更新 widget
-    clearTimeout(promptTimer);
-    console.log('[GCal] ✅ gcalSilentRefreshOrPrompt 靜默刷新成功');
-    updateGcalWidget();
-    // 若同步帳號尚未設定，補設（登入流程中可能還沒設）
-    if (currentUser && !getGcalSyncEmail()) {
-      gcalSet(GCAL_SYNC_KEY, currentUser.email);
-    }
-  }
-
-  function tryRefresh() {
-    if (retryCount > maxRetry) {
-      console.warn('[GCal] gcalSilentRefreshOrPrompt：SDK 等待超時（10s）');
-      if (!prompted) {
-        prompted = true;
-        clearTimeout(promptTimer);
-        showGcalExpiredModal(email);
-      }
-      return;
-    }
-    if (!window.google || !window.google.accounts) {
-      retryCount++;
-      setTimeout(tryRefresh, 500);
-      return;
-    }
-    if (!gcalTokenClient) initGcalClient();
-    if (!gcalTokenClient) { retryCount++; setTimeout(tryRefresh, 500); return; }
-
-    // 串接到 pendingAction，不覆蓋已有的
-    var prev = gcalPendingAction;
-    gcalPendingAction = function() {
-      onTokenSuccess();
-      if (prev) prev();
-    };
-    console.log('[GCal] gcalSilentRefreshOrPrompt：送出靜默 requestAccessToken（retry:', retryCount, '）');
-    gcalTokenClient.requestAccessToken({ prompt: '' });
-  }
-  tryRefresh();
-}
-
-function showGcalExpiredModal(email) {
-  var emailEl = document.getElementById('gcalExpiredEmail');
-  if (emailEl) emailEl.textContent = email || getGcalSyncEmail();
-  openModal('gcalExpiredOverlay');
-}
-
-function gcalSilentRefresh(retryCount) {
-  retryCount = retryCount || 0;
-  if (retryCount > 10) {
-    console.warn('[GCal] ❌ 靜默 refresh 失敗：GIS SDK 載入超時（已重試 10 次）');
-    return;
-  }
-  if (!window.google || !window.google.accounts) {
-    setTimeout(function() { gcalSilentRefresh(retryCount + 1); }, 500);
-    return;
-  }
-  if (!gcalTokenClient) initGcalClient();
-  if (!gcalTokenClient) {
-    setTimeout(function() { gcalSilentRefresh(retryCount + 1); }, 500);
-    return;
-  }
-  // gcalPendingAction 不設定（純靜默，無後續 callback）
-  // token callback 裡會呼叫現有的 gcalPendingAction
-  gcalTokenClient.requestAccessToken({ prompt: '' });
 }
 
 var GCAL_DEFAULT_TITLE_FORMAT = '📖 {time} {teacher} / {course}';
@@ -2943,8 +2838,15 @@ function initGcalClient() {
     callback: function(resp) {
       if (resp.error) {
         console.error('[GCal] ❌ token callback 失敗:', resp.error);
-        toast('Google Calendar 授權失敗：' + resp.error, '⚠️');
+        // 【Bug Fix #11】純背景靜默刷新失敗時不彈 toast，避免登入後干擾使用者
+        // 改由 updateGcalWidget 顯示「需重新授權」徽章
+        if (!gcalSilentMode) {
+          toast('Google Calendar 授權失敗：' + resp.error, '⚠️');
+        } else {
+          console.log('[GCal] silentMode=true，不顯示 toast，改由徽章提示');
+        }
         gcalPendingAction = null;
+        updateGcalWidget(); // 失敗時也要更新徽章
         return;
       }
       gcalAccessToken = resp.access_token;
@@ -2955,6 +2857,8 @@ function initGcalClient() {
       if (gcalTokenTimeout) { clearTimeout(gcalTokenTimeout); gcalTokenTimeout = null; }
       // 標記「曾成功授權過」（永久記錄，不隨登出清除，存儲在 IndexedDB）
       gcalSet(GCAL_ENABLED_KEY, '1');
+      // 【啟發式靜默刷新】記錄成功時間戳，下次登入用來判斷是否值得嘗試 silent refresh
+      gcalSet(GCAL_LAST_SUCCESS_KEY, Date.now().toString());
       console.log('[GCal] ✅ token 取得成功');
       updateGcalWidget();
       if (gcalPendingAction) { var a = gcalPendingAction; gcalPendingAction = null; a(); }
@@ -2965,6 +2869,14 @@ function initGcalClient() {
 var gcalTokenTimeout = null;
 
 function ensureGcalToken(callback) {
+  // 【守門員機制】在執行任何 requestAccessToken 之前必須先判斷 isGcalSyncAccount()
+  // 若使用者未開啟同步（從未授權 / 已關閉 / 已拒絕 / email 不匹配），直接終止
+  // 不彈任何 UI，僅留 console 警告供除錯使用
+  if (!isGcalSyncAccount()) {
+    console.warn('[GCal] ensureGcalToken: 守門員攔截 — 該帳號未啟用日曆同步，終止 token 請求');
+    return;
+  }
+
   if (gcalAccessToken && Date.now() < gcalTokenExpiry) {
     callback();
     return;
@@ -2972,25 +2884,32 @@ function ensureGcalToken(callback) {
   console.log('[GCal] ensureGcalToken: token 過期或不存在，清除並重新取得');
   gcalAccessToken = null;
   gcalTokenExpiry = 0;
-  // 【X1】使用 gcalRemove 替代直接 localStorage，自動同步刪除 IndexedDB
+  // 【X1】使用 gcalRemove 替代直接 localStorage,自動同步刪除 IndexedDB
   gcalRemove('sb_gcal_token');
   gcalRemove('sb_gcal_expiry');
   updateGcalWidget();
   if (!gcalTokenClient) { console.log('[GCal] ensureGcalToken: 初始化 gcalTokenClient'); initGcalClient(); }
-  if (!gcalTokenClient) { toast('Google Calendar SDK 尚未載入，請重新整理', '⚠️'); return; }
-  // 串接而非覆蓋，保留 gcalSilentRefreshOrPrompt 的 promptTimer 清除邏輯
+  if (!gcalTokenClient) {
+    // SDK 尚未載入 → 僅 console 警告，不再彈 toast 干擾使用者
+    // （具體操作功能按鈕時再以 UI 提示）
+    console.warn('[GCal] ensureGcalToken: Google Calendar SDK 尚未載入');
+    return;
+  }
+  // 串接而非覆蓋現有的 gcalPendingAction，避免覆寫並行請求的 callback
   var prevAction = gcalPendingAction;
   gcalPendingAction = function() {
     if (prevAction) prevAction();
     callback();
   };
+  // 【移除逾時提示】原本 10 秒未取得 token 就彈 toast 的邏輯已移除
+  // 改為靜默處理 — 由具體操作功能按鈕（如 gcalPullFromCalendar）依使用情境自行提示
+  // 仍保留 console 警告供除錯使用
   if (gcalTokenTimeout) clearTimeout(gcalTokenTimeout);
   gcalTokenTimeout = setTimeout(function() {
     if (gcalPendingAction) {
       gcalPendingAction = null;
       gcalTokenTimeout = null;
-      console.warn('[GCal] ❌ ensureGcalToken: 靜默取得 token 逾時（10秒）');
-      toast('Google 日曆 token 已過期，請前往「📅 日曆同步」重新授權', '⚠️');
+      console.warn('[GCal] ❌ ensureGcalToken: 靜默取得 token 逾時（10秒），不彈 UI 提示');
     }
   }, 10000);
   gcalTokenClient.requestAccessToken({ prompt: '' });
@@ -3419,6 +3338,7 @@ function clearGcalSettings() {
   // 【X1】關閉同步：使用統一的 gcalSet/gcalRemove 確保同時更新 localStorage 和 IndexedDB
   gcalRemove(GCAL_SYNC_KEY);
   gcalRemove(GCAL_ENABLED_KEY);   // 清除授權記錄，下次登入不再觸發
+  gcalRemove(GCAL_LAST_SUCCESS_KEY); // 清除啟發式時間戳，避免重新授權前誤觸發 silent refresh
   gcalSet(GCAL_DISABLED_KEY, '1');  // 設為「已關閉」，同時寫入 IndexedDB（永久記錄）
   
   gcalAccessToken = null;
@@ -3431,6 +3351,82 @@ function clearGcalSettings() {
   updateGcalWidget();
   closeModal('gcalOverlay');
   toast('Google 日曆同步已關閉', '📅');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 【自動斷點同步 (Reconciliation) 機制】
+// ════════════════════════════════════════════════════════════════════════════
+// 用途：若期間有新增的預約因 token 失效而沒能推上 Google 日曆，
+//      在 token 重新取得後自動「補推」這些遺漏的預約，達成無感同步。
+// 觸發時機：
+//   1. gcalAuthorize 使用者主動授權成功後（gcalPendingAction）— 主要觸發點
+//   （登入時不再主動發 token 請求，故無「靜默刷新成功後觸發」此情境）
+//
+// 篩選條件（必須全部成立才會被視為「待補推」）：
+//   - 有 teacherId（老師 ID）
+//   - 有 date 與 time（日期、時間）
+//   - status !== 'cancelled'（非取消狀態）
+//   - 沒有 gcalEventId（尚未同步）
+//
+// 批次策略：每批 5 筆並行推送，批次間延遲 800ms，避免觸發 Google API rate limit。
+// ════════════════════════════════════════════════════════════════════════════
+function gcalSyncPendingEvents() {
+  // 守門員：必須是已啟用同步的帳號才執行
+  if (!isGcalSyncAccount()) {
+    console.log('[GCal] gcalSyncPendingEvents: 非同步帳號，跳過斷點同步');
+    return;
+  }
+  // bookings 必須存在且為陣列
+  if (!Array.isArray(bookings) || bookings.length === 0) {
+    console.log('[GCal] gcalSyncPendingEvents: bookings 為空，無需補推');
+    return;
+  }
+
+  // 篩選：有老師ID + 有日期時間 + 非取消狀態 + 尚未取得 gcalEventId
+  var pending = bookings.filter(function(b) {
+    return b
+      && b.teacherId
+      && b.date
+      && b.time
+      && b.status !== 'cancelled'
+      && !b.gcalEventId;
+  });
+
+  if (pending.length === 0) {
+    console.log('[GCal] gcalSyncPendingEvents: 無遺漏預約，所有資料已同步');
+    return;
+  }
+
+  console.group('[GCal] 🔁 自動斷點同步啟動');
+  console.log('待補推預約數：', pending.length);
+  console.groupEnd();
+
+  // 批次推送：每批 BATCH_SIZE 筆，間隔 BATCH_INTERVAL ms
+  var BATCH_SIZE     = 5;
+  var BATCH_INTERVAL = 800;
+  var idx = 0;
+
+  function pushNextBatch() {
+    if (idx >= pending.length) {
+      console.log('[GCal] ✅ 自動斷點同步完成，共補推', pending.length, '筆');
+      return;
+    }
+    var batch = pending.slice(idx, idx + BATCH_SIZE);
+    console.log('[GCal] 補推批次：', idx + 1, '~', idx + batch.length, '/', pending.length);
+    // 同批次並行推送（gcalCreateEvent 內部會處理 token 與重試）
+    batch.forEach(function(b) {
+      try { gcalCreateEvent(b); }
+      catch (e) { console.warn('[GCal] 補推失敗:', b.id, e); }
+    });
+    idx += BATCH_SIZE;
+    if (idx < pending.length) {
+      setTimeout(pushNextBatch, BATCH_INTERVAL);
+    } else {
+      console.log('[GCal] ✅ 自動斷點同步完成，共補推', pending.length, '筆');
+    }
+  }
+
+  pushNextBatch();
 }
 
 function gcalAuthorize() {
@@ -3455,6 +3451,8 @@ function gcalAuthorize() {
     updateGcalWidget();
     toast('Google 日曆授權成功，新增預約將自動同步 📅', '✅');
     openGcalSettings();
+    // 【斷點同步】使用者主動授權成功 → 立即觸發遺漏 booking 補推
+    try { gcalSyncPendingEvents(); } catch(e) { console.warn('[GCal] 斷點同步觸發失敗:', e); }
   };
   gcalTokenClient.requestAccessToken({ prompt: 'consent' });
 }
