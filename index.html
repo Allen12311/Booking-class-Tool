@@ -1101,23 +1101,57 @@ function stopGcalRefresh() {
 
 // 【Bug Fix #11】silentMode 旗標：true 時 token callback 失敗不彈 toast、不彈視窗
 var gcalSilentMode = false;
+// 【觀察用】silent refresh 進行中時的「即時失敗」hook：
+// 讓 GIS token callback 在收到 OAuth error response 時，可以立即終結 silentRefresh
+// 並把錯誤原因傳出來，不必等 15 秒 timeout
+var gcalSilentErrorHook = null;
+// 【觀察用】記錄最近一次 silent refresh 的失敗原因，給 widget / 除錯使用
+var gcalLastSilentFailReason = null;
 
 // 純背景靜默刷新（不彈視窗、不彈 toast，只回傳 success/fail callback）
+// 失敗時會印出細分原因到 console.warn，方便辨識：
+//   - "GIS SDK 未載入"             ← script 還沒下載 / 被擋
+//   - "TokenClient 初始化失敗"      ← gapi.accounts.oauth2 無法 init
+//   - "OAuth error: <code>"        ← Google 回 error response（access_denied / immediate_failed 等）
+//   - "15s timeout（COOP / session）" ← 沒回應，多半是 COOP 阻擋 popup window.close 或 Google session 失效
 function gcalSilentRefreshBackground(callback) {
-  if (!window.google || !window.google.accounts) { callback(false); return; }
+  if (!window.google || !window.google.accounts) {
+    gcalLastSilentFailReason = 'GIS SDK 未載入';
+    console.warn('[GCal] silent refresh 跳過:', gcalLastSilentFailReason);
+    callback(false); return;
+  }
   if (!gcalTokenClient) initGcalClient();
-  if (!gcalTokenClient) { callback(false); return; }
+  if (!gcalTokenClient) {
+    gcalLastSilentFailReason = 'TokenClient 初始化失敗';
+    console.warn('[GCal] silent refresh 跳過:', gcalLastSilentFailReason);
+    callback(false); return;
+  }
   var done = false;
+  var startedAt = Date.now();
   // 進入靜默模式：失敗時不顯示 toast
   gcalSilentMode = true;
-  function finish(success) {
+  function finish(success, reason) {
     if (done) return;
     done = true;
     clearTimeout(timer);
     gcalSilentMode = false; // 退出靜默模式
+    gcalSilentErrorHook = null;
+    if (success) {
+      gcalLastSilentFailReason = null;
+      console.log('[GCal] silent refresh 成功（耗時', Date.now() - startedAt, 'ms）');
+    } else {
+      gcalLastSilentFailReason = reason || '(unknown)';
+      console.warn('[GCal] silent refresh 失敗（耗時', Date.now() - startedAt, 'ms）原因:', gcalLastSilentFailReason);
+    }
     callback(success);
   }
-  var timer = setTimeout(function() { finish(false); }, 15000);
+  var timer = setTimeout(function() {
+    finish(false, '15s timeout — 多半是 COOP 阻擋 GIS popup window.close，或 Google account session 已失效');
+  }, 15000);
+  // OAuth error 即時失敗 hook：由 initGcalClient 的 token callback 觸發
+  gcalSilentErrorHook = function(err) {
+    finish(false, 'OAuth error: ' + (err || 'unknown'));
+  };
   var prev = gcalPendingAction;
   gcalPendingAction = function() {
     finish(true);
@@ -1157,8 +1191,10 @@ document.addEventListener('visibilitychange', function() {
         gcalAccessToken = null;
         gcalTokenExpiry = 0;
         updateGcalWidget();
-        // 回到頁面時是合適的提示時機
-        toast('Google 日曆授權已過期，請前往「📅 日曆同步」重新授權', '⚠️');
+        // 【A】不再彈 toast，避免使用者每次切回分頁都被打擾
+        // 失敗原因已由 gcalSilentRefreshBackground 印出 console.warn（細分 COOP / OAuth / SDK）
+        // 徽章已變紅，使用者主動點「📅 日曆同步」時自然會看到「需重新授權」
+        console.log('[Visibility] GCal silent refresh 失敗，徽章已更新為「需重新授權」（原因見上方 warn）');
       }
     });
   }
@@ -1356,12 +1392,19 @@ function onAuthStateChanged(user) {
     gcalTokenExpiry = 0;
     gcalTokenClient = null;  // 確保背景任務停止
 
-    // 【重要】清理登出帳號的 token 和臨時狀態
+    // 【重要】清理登出帳號的臨時狀態
     // 使用 logoutUser（在 currentUser=null 前保存的值）
+    //
+    // 【Bug Fix】登出時保留 sb_gcal_token / sb_gcal_expiry：
+    //   ─ token/expiry 是 per-UID 儲存（gcalKey 會附加 _uid），不會造成跨帳號污染
+    //   ─ 保留可讓「登出 → 立即重登同帳號」在 token 有效期內直接走「token 有效」
+    //     分支恢復同步（gcalHandleAuthStateChange line 2490），免得進入 silent refresh
+    //   ─ silent refresh 在 GitHub Pages 上會被 Cross-Origin-Opener-Policy 擋住
+    //     window.close，導致 GIS popup 永遠不回 callback → 15s timeout → 紅徽章
+    //   ─ 過期 token 由各處呼叫端自行判斷（Date.now() < expiry）；無需在登出時清
     if (logoutUser && logoutUser.uid) {
       // 此時 currentUser 仍指向 logoutUser，gcalRemove 會用正確的 key
-      gcalRemove('sb_gcal_token');      // 清 token
-      gcalRemove('sb_gcal_expiry');     // 清 expiry
+      // 只清「同步 email」這個臨時旗標，token/expiry 保留以便快速重登
       gcalRemove(GCAL_SYNC_KEY);        // 清同步 email
 
       // 【Bug Fix P2 #4】清理該 UID 的 IDLE_KEY，避免下次登入時繼承舊時間戳
@@ -1369,7 +1412,7 @@ function onAuthStateChanged(user) {
       // 【Bug Fix P2 #5】清理該 UID 的 group_dismissed，避免影響其他帳號
       sessionStorage.removeItem('sb_group_dismissed_' + logoutUser.uid);
 
-      console.log('[GCal] 登出時清理 token 和臨時狀態（UID:', logoutUser.uid + '）');
+      console.log('[GCal] 登出：保留 token（per-UID）、清除同步旗標 UID:', logoutUser.uid);
     }
     // 順手清掉「無使用者」狀態下可能殘留的舊 anon key
     localStorage.removeItem(IDLE_KEY_BASE);
@@ -2837,13 +2880,20 @@ function initGcalClient() {
     scope: GCAL_SCOPE,
     callback: function(resp) {
       if (resp.error) {
-        console.error('[GCal] ❌ token callback 失敗:', resp.error);
+        // 細分錯誤碼供除錯：access_denied / popup_closed_by_user / immediate_failed / interaction_required …
+        var subtype = resp.error_subtype || '';
+        console.error('[GCal] ❌ token callback 失敗:', resp.error, subtype ? '(subtype: ' + subtype + ')' : '');
         // 【Bug Fix #11】純背景靜默刷新失敗時不彈 toast，避免登入後干擾使用者
         // 改由 updateGcalWidget 顯示「需重新授權」徽章
         if (!gcalSilentMode) {
           toast('Google Calendar 授權失敗：' + resp.error, '⚠️');
         } else {
-          console.log('[GCal] silentMode=true，不顯示 toast，改由徽章提示');
+          // silentMode 中：通知 silent refresh 立即結束（避免空等 15 秒 timeout）
+          if (typeof gcalSilentErrorHook === 'function') {
+            gcalSilentErrorHook(resp.error + (subtype ? '/' + subtype : ''));
+          } else {
+            console.log('[GCal] silentMode=true，不顯示 toast，改由徽章提示');
+          }
         }
         gcalPendingAction = null;
         updateGcalWidget(); // 失敗時也要更新徽章
